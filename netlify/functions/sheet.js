@@ -51,8 +51,14 @@ exports.handler = async (event) => {
     tab: body.tab || "orientation camera ap",
   };
 
+  // Append mode on URL too — helps if an old Apps Script ignores JSON body.mode.
+  const targetUrl =
+    mode === "export" || mode === "patch"
+      ? `${webhookUrl}${webhookUrl.includes("?") ? "&" : "?"}mode=${encodeURIComponent(mode)}`
+      : webhookUrl;
+
   try {
-    const response = await fetch(webhookUrl, {
+    const response = await fetch(targetUrl, {
       method: "POST",
       redirect: "follow",
       headers: { "Content-Type": "application/json" },
@@ -68,6 +74,11 @@ exports.handler = async (event) => {
         error: "Apps Script returned non-JSON. Redeploy the script as Anyone + New version.",
         preview: text.slice(0, 200),
       }, cors);
+    }
+    if (data && data.ok === false && /Missing values/i.test(String(data.error || ""))) {
+      data.hint =
+        data.hint ||
+        "Apps Script deploy is still the OLD version. In Apps Script: Deploy → Manage deployments → pencil → Version: New version → Deploy. Then open /exec in a browser — message must mention mode=export.";
     }
     return json(response.ok ? 200 : 502, data, cors);
   } catch (error) {

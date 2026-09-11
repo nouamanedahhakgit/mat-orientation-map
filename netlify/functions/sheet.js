@@ -3,6 +3,9 @@
  * Set in Netlify → Site settings → Environment variables:
  *   SHEET_WEBHOOK_URL = https://script.google.com/macros/s/.../exec
  *   SHEET_WEBHOOK_SECRET = (optional, same as Apps Script WEBHOOK_SECRET)
+ *
+ * Apps Script /exec returns 302 → googleusercontent. Must POST once, then GET
+ * the Location (fetch redirect:follow drops/changes the body and breaks export).
  */
 
 const ALLOWED_MODES = new Set(["export", "patch", "full"]);
@@ -51,40 +54,59 @@ exports.handler = async (event) => {
     tab: body.tab || "orientation camera ap",
   };
 
-  // Append mode on URL too — helps if an old Apps Script ignores JSON body.mode.
   const targetUrl =
     mode === "export" || mode === "patch"
       ? `${webhookUrl}${webhookUrl.includes("?") ? "&" : "?"}mode=${encodeURIComponent(mode)}`
       : webhookUrl;
 
   try {
-    const response = await fetch(targetUrl, {
-      method: "POST",
-      redirect: "follow",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const text = await response.text();
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      return json(502, {
-        ok: false,
-        error: "Apps Script returned non-JSON. Redeploy the script as Anyone + New version.",
-        preview: text.slice(0, 200),
-      }, cors);
-    }
+    const data = await postAppsScript(targetUrl, payload);
     if (data && data.ok === false && /Missing values/i.test(String(data.error || ""))) {
       data.hint =
         data.hint ||
-        "Apps Script deploy is still the OLD version. In Apps Script: Deploy → Manage deployments → pencil → Version: New version → Deploy. Then open /exec in a browser — message must mention mode=export.";
+        "Apps Script deploy is still the OLD version (no mode=export). Deploy → Manage deployments → Edit (pencil) → Version: New version → Deploy. Then open the /exec URL — message must mention export-v2.";
     }
-    return json(response.ok ? 200 : 502, data, cors);
+    return json(200, data, cors);
   } catch (error) {
     return json(502, { ok: false, error: String(error.message || error) }, cors);
   }
 };
+
+async function postAppsScript(url, payload) {
+  const serialized = JSON.stringify(payload);
+  const first = await fetch(url, {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      Accept: "application/json",
+    },
+    body: serialized,
+  });
+
+  let text = await first.text();
+  const location = first.headers.get("location");
+
+  // Apps Script classic flow: 302 → GET echo URL with JSON body.
+  if ([301, 302, 303, 307, 308].includes(first.status) && location) {
+    const second = await fetch(new URL(location, url).href, {
+      method: "GET",
+      redirect: "follow",
+      headers: { Accept: "application/json" },
+    });
+    text = await second.text();
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(
+      /sign in|accounts\.google/i.test(text)
+        ? "Apps Script blocked the request. Redeploy with Who has access = Anyone."
+        : `Apps Script returned non-JSON: ${text.slice(0, 180)}`,
+    );
+  }
+}
 
 function json(statusCode, data, headers) {
   return {

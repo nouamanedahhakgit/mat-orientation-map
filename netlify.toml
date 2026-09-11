@@ -1,0 +1,14 @@
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+[[redirects]]
+  from = "/api/sheet"
+  to = "/.netlify/functions/sheet"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"

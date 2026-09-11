@@ -1,0 +1,12 @@
+# Dependencies / local
+node_modules/
+.DS_Store
+Thumbs.db
+
+# Netlify CLI local state
+.netlify/
+
+# Secrets — set in Netlify UI, never commit
+.env
+.env.*
+!.env.example

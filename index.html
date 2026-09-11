@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>MAT Orientation Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="./styles.css?v=2" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div>
+        <strong>MAT Orientation</strong>
+        <span id="sync-status" class="sync-status">Loading Excel…</span>
+      </div>
+      <div class="topbar-actions">
+        <button type="button" id="btn-refresh" class="ghost">Refresh</button>
+        <button type="button" id="btn-fit" class="ghost">Fit</button>
+      </div>
+    </header>
+    <main id="map" aria-label="MAT orientation map"></main>
+    <aside id="drawer" class="drawer" hidden>
+      <div class="drawer-head">
+        <div>
+          <h2 id="drawer-title">MAT</h2>
+          <p id="drawer-meta"></p>
+        </div>
+        <button type="button" id="drawer-close" class="ghost" aria-label="Close">✕</button>
+      </div>
+      <div class="gps-assist" id="gps-assist">
+        <div>
+          <strong>Activate GPS / compass</strong>
+          <p id="gps-assist-text">Turn it on to find the <b>beach (12)</b>, then set each AP and camera.</p>
+        </div>
+        <button type="button" id="gps-assist-btn" class="ghost">Activate GPS</button>
+      </div>
+      <div id="drawer-body" class="drawer-body"></div>
+    </aside>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="./app.js?v=2" defer></script>
+</body>
+</html>

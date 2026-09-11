@@ -1,0 +1,158 @@
+:root {
+  --bg: #0f1c24;
+  --panel: #152833;
+  --ink: #e8f1f5;
+  --muted: #8aa3b0;
+  --line: rgba(255, 255, 255, 0.12);
+  --accent: #3ec7ff;
+  --ok: #6bcb77;
+  --warn: #ffb347;
+  --danger: #ff6b6b;
+  --drawer-w: min(360px, 92vw);
+  font-family: "Segoe UI", "IBM Plex Sans", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); }
+#app { position: relative; height: 100%; overflow: hidden; }
+
+.topbar {
+  position: absolute;
+  z-index: 500;
+  inset: 12px 12px auto 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(15, 28, 36, 0.88);
+  backdrop-filter: blur(10px);
+}
+.topbar strong { display: block; font-size: 0.95rem; letter-spacing: 0.02em; }
+.sync-status { display: block; margin-top: 2px; color: var(--muted); font-size: 0.72rem; }
+.sync-status.ok { color: var(--ok); }
+.sync-status.err { color: var(--danger); }
+.topbar-actions { display: flex; gap: 8px; }
+
+.ghost {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+.ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+#map { height: 100%; width: 100%; background: #0b151b; }
+
+.drawer {
+  position: absolute;
+  z-index: 600;
+  top: 0;
+  right: 0;
+  width: var(--drawer-w);
+  height: 100%;
+  background: rgba(21, 40, 51, 0.96);
+  border-left: 1px solid var(--line);
+  backdrop-filter: blur(12px);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(0);
+  transition: transform 0.22s ease;
+}
+.drawer[hidden] { display: none; }
+.drawer-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 16px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.drawer-head h2 { margin: 0; font-size: 1.25rem; }
+.drawer-head p { margin: 4px 0 0; color: var(--muted); font-size: 0.78rem; }
+.gps-assist {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(62, 199, 255, 0.1);
+}
+.gps-assist.is-active { background: rgba(53, 214, 208, 0.12); }
+.gps-assist.is-ready { background: rgba(107, 203, 119, 0.14); }
+.gps-assist strong { display: block; font-size: 0.78rem; }
+.gps-assist p { margin: 2px 0 0; color: var(--muted); font-size: 0.68rem; line-height: 1.35; }
+.gps-assist b { color: var(--ink); }
+.gps-assist .ghost { white-space: nowrap; flex: 0 0 auto; }
+.drawer-body {
+  overflow: auto;
+  padding: 12px 16px 28px;
+  display: grid;
+  gap: 10px;
+}
+
+.clock-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.clock-card .label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 0.82rem;
+}
+.clock-card .label span { color: var(--muted); }
+.clock-card select {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #0f1c24;
+  color: var(--ink);
+  padding: 10px 12px;
+  font: inherit;
+}
+.clock-card.is-pending { opacity: 0.65; }
+
+.mat-marker {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.25);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.mat-marker span { line-height: 1; text-shadow: 0 1px 2px rgba(0,0,0,.45); }
+
+.toast {
+  position: fixed;
+  z-index: 1000;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  background: #1d3340;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 10px 16px;
+  font-size: 0.85rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+@media (max-width: 640px) {
+  .topbar { inset: 8px; padding: 8px 10px; }
+  .drawer { width: 100%; height: min(58vh, 420px); top: auto; bottom: 0; border-left: 0; border-top: 1px solid var(--line); }
+}

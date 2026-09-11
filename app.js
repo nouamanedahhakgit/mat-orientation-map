@@ -1,19 +1,4 @@
-const CLOCK_COLORS = {
-  1: "#ff6b6b",
-  2: "#ff8e53",
-  3: "#ffb347",
-  4: "#ffd93d",
-  5: "#c6e377",
-  6: "#6bcb77",
-  7: "#4dd0a0",
-  8: "#4ecdc4",
-  9: "#45b7d1",
-  10: "#6c8cff",
-  11: "#9b7bff",
-  12: "#3ec7ff",
-};
-
-const DEFAULT_ZOOM = 17; // immersive dashboard was 19; −2 levels
+const DEFAULT_ZOOM = 17;
 const POLL_MS = 8000;
 const API_PATH = "/api/sheet";
 
@@ -25,6 +10,8 @@ const state = {
   pollTimer: null,
   lastUpdatedAt: null,
   toastTimer: null,
+  _didFit: false,
+  pending: Object.create(null),
   compass: {
     watching: false,
     heading: null,
@@ -77,7 +64,7 @@ async function loadSheet(showBusy = false) {
   if (showBusy) setStatus("Loading Excel…");
   try {
     const payload = await postSheet({ mode: "export" });
-    if (!payload.ok) throw new Error(payload.error || "Export failed");
+    if (!payload.ok) throw new Error(payload.error || payload.hint || "Export failed");
     const mats = parseSheetValues(payload.values || []);
     state.mats = mats;
     state.lastUpdatedAt = payload.updatedAt || new Date().toISOString();
@@ -87,7 +74,8 @@ async function loadSheet(showBusy = false) {
       if (still) renderDrawer(still);
       else closeDrawer();
     }
-    setStatus(`Live · ${mats.length} MAT · ${formatTime(state.lastUpdatedAt)}`, "ok");
+    const withGps = mats.filter((m) => m.latitude != null && m.longitude != null).length;
+    setStatus(`Live · ${withGps}/${mats.length} MAT on map · ${formatTime(state.lastUpdatedAt)}`, "ok");
   } catch (error) {
     setStatus(error.message || "Sync failed", "err");
     if (showBusy) toast(error.message || "Could not load Excel");
@@ -133,7 +121,7 @@ function parseSheetValues(values) {
       if (!name) continue;
       const clock = parseClock(row[c + 1]);
       if (/^CAM\d+$/i.test(header)) cameras.push({ name, clock });
-      else aps.push({ name, unit: guessUnit(name), clock });
+      else aps.push({ name, unit: guessUnit(name) || header, clock });
     }
 
     mats.push({
@@ -163,37 +151,152 @@ function guessUnit(name) {
 function renderMarkers() {
   state.layer.clearLayers();
   const bounds = [];
+
   for (const mat of state.mats) {
     if (mat.latitude == null || mat.longitude == null) continue;
     const latlng = [mat.latitude, mat.longitude];
     bounds.push(latlng);
-    const color = primaryClockColor(mat);
-    const icon = L.divIcon({
-      className: "",
-      html: `<div class="mat-marker" style="background:${color}"><span>${escapeHtml(mat.matId)}</span></div>`,
-      iconSize: [44, 44],
-      iconAnchor: [22, 22],
+    const selected = String(state.selectedMatId) === String(mat.matId);
+    const devices = buildMatClockDevices(mat);
+    const html = matClockMarkerHtml(mat, devices, selected);
+
+    const marker = L.marker(latlng, {
+      icon: L.divIcon({
+        className: `mat-clock-icon${selected ? " is-selected" : ""}`,
+        html,
+        iconSize: [96, 110],
+        iconAnchor: [48, 48],
+      }),
+      riseOnHover: true,
+      zIndexOffset: selected ? 1200 : 0,
     });
-    const marker = L.marker(latlng, { icon, title: `MAT ${mat.matId}` });
-    marker.on("click", () => openDrawer(mat.matId));
+    marker.on("click", (event) => {
+      if (event.originalEvent) L.DomEvent.stopPropagation(event.originalEvent);
+      openDrawer(mat.matId);
+    });
     state.layer.addLayer(marker);
 
-    L.circle(latlng, {
-      radius: 18,
-      color,
-      weight: 2,
-      fillColor: color,
-      fillOpacity: 0.18,
-      interactive: false,
-    }).addTo(state.layer);
-  }
-  if (bounds.length && !state.selectedMatId) {
-    // Keep current view on poll; only auto-fit when empty selection and first useful data.
-    if (!state._didFit) {
-      fitBounds(bounds);
-      state._didFit = true;
+    if (selected) {
+      L.circle(latlng, {
+        radius: 28,
+        color: "#3ec7ff",
+        weight: 3,
+        fillColor: "#3ec7ff",
+        fillOpacity: 0.18,
+        interactive: false,
+      }).addTo(state.layer);
     }
   }
+
+  if (bounds.length && !state._didFit && !state.selectedMatId) {
+    fitBounds(bounds);
+    state._didFit = true;
+  }
+}
+
+function buildMatClockDevices(mat) {
+  const devices = [];
+  for (const ap of mat.aps || []) {
+    devices.push({
+      kind: "ap",
+      id: ap.name || ap.unit,
+      label: ap.name || ap.unit,
+      clock: ap.clock,
+      estimated: !Number.isInteger(ap.clock),
+    });
+  }
+  for (const cam of mat.cameras || []) {
+    devices.push({
+      kind: "camera",
+      id: cam.name,
+      label: cam.name,
+      clock: cam.clock,
+      estimated: !Number.isInteger(cam.clock),
+    });
+  }
+  assignClockHours(devices);
+  for (const device of devices) {
+    device.color = device.kind === "camera"
+      ? (device.estimated
+        ? { fill: "#7c8da6", stroke: "#c5d0de" }
+        : { fill: "#8b5cf6", stroke: "#e9d5ff" })
+      : (device.estimated
+        ? { fill: "#5b7383", stroke: "#d9ecff" }
+        : { fill: "#4ee29b", stroke: "#bbf7d0" });
+    device.deg = (device.hour % 12) * 30;
+  }
+  return devices;
+}
+
+function assignClockHours(devices) {
+  const used = new Set();
+  const pending = [];
+  for (const device of devices) {
+    if (Number.isInteger(device.clock) && device.clock >= 1 && device.clock <= 12) {
+      device.hour = device.clock;
+      used.add(device.clock);
+    } else {
+      pending.push(device);
+    }
+  }
+  const free = [];
+  for (let h = 1; h <= 12; h += 1) if (!used.has(h)) free.push(h);
+  free.sort((a, b) => hashSeed(String(a)) - hashSeed(String(b)));
+  pending.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  pending.forEach((device, index) => {
+    if (free.length) device.hour = free.shift();
+    else {
+      device.hour = (hashSeed(String(device.id)) % 12) + 1;
+      device.ring = 1 + (index % 2);
+    }
+    device.estimated = true;
+  });
+  const byHour = new Map();
+  for (const device of devices) {
+    const list = byHour.get(device.hour) || [];
+    list.push(device);
+    byHour.set(device.hour, list);
+  }
+  for (const list of byHour.values()) {
+    if (list.length < 2) continue;
+    list.forEach((device, i) => {
+      device.ring = i;
+      device.degJitter = (i - (list.length - 1) / 2) * 8;
+    });
+  }
+}
+
+function hashSeed(text) {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function matClockMarkerHtml(mat, devices, selected = false) {
+  const hub = `${mat.aps.length}·${mat.cameras.length}`;
+  const nodes = devices
+    .map((device) => {
+      const deg = (device.deg || 0) + (device.degJitter || 0);
+      const ring = device.ring || 0;
+      const title = `${device.label} · clock ${device.hour}${device.estimated ? " (est.)" : ""}`;
+      return `<span class="mat-clock-node ${device.kind} ${device.estimated ? "estimated" : ""}" style="--deg:${deg}deg;--ring:${ring};--fill:${device.color.fill};--stroke:${device.color.stroke}" title="${escapeHtml(title)}"></span>`;
+    })
+    .join("");
+  const ticks = [12, 3, 6, 9]
+    .map((h) => `<i class="mat-clock-tick" style="--deg:${(h % 12) * 30}deg">${h === 12 ? "12" : h}</i>`)
+    .join("");
+  return `<div class="mat-clock-marker${selected ? " is-selected" : ""}" title="MAT ${escapeHtml(mat.matId)}">
+    <div class="mat-clock-ring">
+      <span class="mat-clock-beach" title="Beach · 12">B</span>
+      ${ticks}
+      ${nodes}
+      <div class="mat-clock-hub" title="APs · Cameras">${escapeHtml(hub)}</div>
+    </div>
+    <div class="mat-clock-caption">MAT ${escapeHtml(mat.matId)}</div>
+  </div>`;
 }
 
 function fitMap() {
@@ -212,19 +315,11 @@ function fitBounds(bounds) {
   state.map.fitBounds(bounds, { padding: [48, 48], maxZoom: DEFAULT_ZOOM });
 }
 
-function primaryClockColor(mat) {
-  const clocks = [...(mat.aps || []), ...(mat.cameras || [])]
-    .map((item) => item.clock)
-    .filter((c) => c != null);
-  if (!clocks.length) return "#6b7c86";
-  const avg = Math.round(clocks.reduce((a, b) => a + b, 0) / clocks.length);
-  return CLOCK_COLORS[((avg - 1) % 12) + 1] || "#6b7c86";
-}
-
 function openDrawer(matId) {
   const mat = state.mats.find((item) => item.matId === matId);
   if (!mat) return;
   state.selectedMatId = matId;
+  renderMarkers();
   if (mat.latitude != null && mat.longitude != null) {
     state.map.setView([mat.latitude, mat.longitude], DEFAULT_ZOOM, { animate: true });
   }
@@ -235,6 +330,7 @@ function openDrawer(matId) {
 function closeDrawer() {
   state.selectedMatId = null;
   els.drawer.hidden = true;
+  renderMarkers();
 }
 
 function renderDrawer(mat) {
@@ -242,65 +338,120 @@ function renderDrawer(mat) {
   const gps =
     mat.latitude != null && mat.longitude != null
       ? `${mat.latitude}, ${mat.longitude}`
-      : "No GPS in Excel yet";
-  els.drawerMeta.textContent = [mat.terminal, gps].filter(Boolean).join(" · ");
+      : "No GPS in Excel";
+  els.drawerMeta.textContent = `${mat.terminal || ""} · ${mat.aps.length} AP · ${mat.cameras.length} cam · ${gps}`.replace(/^ · /, "");
   updateGpsAssistUi();
 
   const estimated = state.compass.estimatedClock;
-  const sections = [];
-  sections.push(`<h3 style="margin:4px 0 0;font-size:.8rem;color:var(--muted)">Access points</h3>`);
-  if (!mat.aps.length) sections.push(`<p class="drawer-meta">No APs on this row</p>`);
+  const cards = [];
   for (const ap of mat.aps) {
-    sections.push(clockEditorCard({
-      matId: mat.matId,
-      kind: "ap",
-      key: ap.unit || ap.name,
-      label: ap.name || ap.unit,
-      clock: ap.clock,
-      estimated,
-    }));
+    const key = ap.unit || ap.name;
+    cards.push(`<div class="ori-clock-wrap">
+      <span class="ori-kind">AP</span>
+      ${renderClockCard("ap", key, ap.name || key, ap.clock, estimated, mat.matId)}
+    </div>`);
   }
-  sections.push(`<h3 style="margin:12px 0 0;font-size:.8rem;color:var(--muted)">Cameras</h3>`);
-  if (!mat.cameras.length) sections.push(`<p class="drawer-meta">No cameras on this row</p>`);
   for (const cam of mat.cameras) {
-    sections.push(clockEditorCard({
-      matId: mat.matId,
-      kind: "camera",
-      key: cam.name,
-      label: cam.name,
-      clock: cam.clock,
-      estimated,
-    }));
+    cards.push(`<div class="ori-clock-wrap">
+      <span class="ori-kind cam">CAM</span>
+      ${renderClockCard("camera", cam.name, "Camera", cam.clock, estimated, mat.matId)}
+    </div>`);
   }
-  els.drawerBody.innerHTML = sections.join("");
+  els.drawerBody.innerHTML = cards.length
+    ? cards.join("")
+    : `<div class="sync-status">No APs or cameras on this MAT row</div>`;
 
-  els.drawerBody.querySelectorAll("select.clock-select").forEach((select) => {
-    select.addEventListener("change", () => {
-      const value = select.value === "" ? null : Number(select.value);
+  els.drawerBody.querySelectorAll("[data-clock-hour]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      const hour = Number(button.dataset.clockHour);
+      const already = button.classList.contains("active");
       void saveOrientation({
-        matId: select.dataset.matId,
-        kind: select.dataset.kind,
-        key: select.dataset.key,
-        clock: value,
-        select,
+        matId: button.dataset.matId,
+        kind: button.dataset.kind,
+        key: button.dataset.key,
+        clock: already ? null : hour,
       });
     });
   });
   els.drawerBody.querySelectorAll("[data-apply-estimate]").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
       if (state.compass.estimatedClock == null) return;
-      const select = button.closest(".clock-card")?.querySelector("select.clock-select");
-      if (!select) return;
-      select.value = String(state.compass.estimatedClock);
       void saveOrientation({
         matId: button.dataset.matId,
         kind: button.dataset.kind,
         key: button.dataset.key,
         clock: state.compass.estimatedClock,
-        select,
       });
     });
   });
+}
+
+function renderClockCard(kind, key, subtitle, clock, estimated, matId) {
+  const hours = [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  const pendingKey = `${matId}:${kind}:${key}`;
+  const pending = Boolean(state.pending[pendingKey]);
+  return `
+    <article class="clock-card ${pending ? "is-pending" : ""}" data-kind="${escapeHtml(kind)}" data-key="${escapeHtml(key)}" data-mat-id="${escapeHtml(matId)}">
+      <div class="clock-card-head">
+        <div>
+          <strong>${escapeHtml(key)}</strong>
+          <small>${escapeHtml(subtitle || "")}</small>
+        </div>
+        <div class="clock-value">${clock != null ? clock : "—"}</div>
+      </div>
+      <div class="clock-face" aria-label="Clock orientation for ${escapeHtml(key)}">
+        <span class="clock-beach">Beach · 12</span>
+        ${hours.map((hour) => {
+          const angle = (hour % 12) * 30;
+          return `<button type="button" class="clock-hour ${clock === hour ? "active" : ""} ${estimated === hour ? "suggest" : ""}"
+            style="--deg:${angle}deg"
+            data-kind="${escapeHtml(kind)}"
+            data-key="${escapeHtml(key)}"
+            data-mat-id="${escapeHtml(matId)}"
+            data-clock-hour="${hour}"
+            ${pending ? "disabled" : ""}>${hour}</button>`;
+        }).join("")}
+        <span class="clock-center"></span>
+      </div>
+      <div class="clock-save-status" ${pending ? "" : "hidden"}>${pending ? "Saving…" : ""}</div>
+      ${estimated != null
+        ? `<button type="button" class="secondary-button clock-apply" data-apply-estimate data-kind="${escapeHtml(kind)}" data-key="${escapeHtml(key)}" data-mat-id="${escapeHtml(matId)}" ${pending ? "disabled" : ""}>Use compass → ${estimated}</button>`
+        : ""}
+    </article>`;
+}
+
+async function saveOrientation({ matId, kind, key, clock }) {
+  const pendingKey = `${matId}:${kind}:${key}`;
+  state.pending[pendingKey] = true;
+  const mat = state.mats.find((item) => item.matId === matId);
+  if (mat) {
+    const list = kind === "ap" ? mat.aps : mat.cameras;
+    const item = list.find((row) => (row.unit || row.name) === key || row.name === key);
+    if (item) item.clock = clock;
+    renderMarkers();
+    renderDrawer(mat);
+  }
+
+  const patch = { matId, aps: {}, cameras: {} };
+  if (kind === "ap") patch.aps[key] = clock;
+  else patch.cameras[key] = clock;
+
+  try {
+    const payload = await postSheet({ mode: "patch", patch });
+    if (!payload.ok) throw new Error(payload.error || "Patch failed");
+    toast(clock == null ? `${key} cleared` : `${key} → ${clock}`);
+    setStatus(`Saved · ${formatTime(new Date().toISOString())}`, "ok");
+  } catch (error) {
+    toast(error.message || "Save failed");
+    setStatus(error.message || "Save failed", "err");
+    await loadSheet(false);
+  } finally {
+    delete state.pending[pendingKey];
+    const again = state.mats.find((item) => item.matId === matId);
+    if (again && state.selectedMatId === matId) renderDrawer(again);
+  }
 }
 
 function updateGpsAssistUi() {
@@ -312,11 +463,11 @@ function updateGpsAssistUi() {
   if (error) {
     els.gpsAssistText.textContent = error;
   } else if (watching && estimatedClock != null) {
-    els.gpsAssistText.innerHTML = `Phone ~${heading != null ? `${Math.round(heading)}°` : "—"} → suggest <b>${estimatedClock}</b>. Beach = <b>12</b>. Point at each AP/camera and set it.`;
+    els.gpsAssistText.innerHTML = `Phone ~${heading != null ? `${Math.round(heading)}°` : "—"} → suggest <b>${estimatedClock}</b>. Beach = <b>12</b>. Tap hour on each dial.`;
   } else if (watching) {
-    els.gpsAssistText.innerHTML = `Point phone to the <b>beach (12)</b> first, then toward each AP or camera.`;
+    els.gpsAssistText.innerHTML = `Point phone to the <b>beach (12)</b>, then toward each AP or camera.`;
   } else {
-    els.gpsAssistText.innerHTML = `Turn it on to find the <b>beach (12)</b>, then set each AP and camera.`;
+    els.gpsAssistText.innerHTML = `Turn it on to find the <b>beach (12)</b>, then set each AP and camera on the horloge.`;
   }
 }
 
@@ -350,7 +501,7 @@ function startCompassAssist() {
     window.addEventListener("deviceorientation", onOrientation, true);
     state.compass.watching = true;
     state.compass._onOrientation = onOrientation;
-    toast("GPS/compass on — point to beach (12), then each device");
+    toast("GPS/compass on — beach is 12");
     updateGpsAssistUi();
   };
   if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
@@ -373,7 +524,7 @@ function startCompassAssist() {
     return;
   }
   if (!window.DeviceOrientationEvent) {
-    state.compass.error = "No compass here — look to beach (12) and set each AP/camera manually";
+    state.compass.error = "No compass here — set each AP/camera manually on the dial";
     toast(state.compass.error);
     updateGpsAssistUi();
     return;
@@ -414,60 +565,6 @@ function clockFromHeading(headingDegrees, beachBearingDegrees = 0) {
   let hour = Math.round(relative / 30) % 12;
   if (hour === 0) hour = 12;
   return hour;
-}
-
-function clockEditorCard({ matId, kind, key, label, clock, estimated = null }) {
-  const options = [`<option value="">—</option>`]
-    .concat(Array.from({ length: 12 }, (_, i) => {
-      const hour = i + 1;
-      const selected = Number(clock) === hour ? "selected" : "";
-      const suggest = Number(estimated) === hour ? " ★" : "";
-      return `<option value="${hour}" ${selected}>${hour}${hour === 12 ? " (beach)" : ""}${suggest}</option>`;
-    }))
-    .join("");
-  const bg = clock != null ? CLOCK_COLORS[clock] : "transparent";
-  return `<div class="clock-card" data-key="${escapeHtml(key)}">
-    <div class="label"><b>${escapeHtml(label)}</b><span style="color:${bg === "transparent" ? "var(--muted)" : bg}">${clock ?? "unset"}</span></div>
-    <select class="clock-select" data-mat-id="${escapeHtml(matId)}" data-kind="${escapeHtml(kind)}" data-key="${escapeHtml(key)}" style="border-color:${bg === "transparent" ? "var(--line)" : bg}">
-      ${options}
-    </select>
-    ${estimated != null
-      ? `<button type="button" class="ghost" data-apply-estimate data-mat-id="${escapeHtml(matId)}" data-kind="${escapeHtml(kind)}" data-key="${escapeHtml(key)}">Use compass → ${estimated}</button>`
-      : ""}
-  </div>`;
-}
-
-async function saveOrientation({ matId, kind, key, clock, select }) {
-  const card = select.closest(".clock-card");
-  if (card) card.classList.add("is-pending");
-  select.disabled = true;
-  const patch = { matId, aps: {}, cameras: {} };
-  if (kind === "ap") patch.aps[key] = clock;
-  else patch.cameras[key] = clock;
-
-  // Optimistic local update
-  const mat = state.mats.find((item) => item.matId === matId);
-  if (mat) {
-    const list = kind === "ap" ? mat.aps : mat.cameras;
-    const item = list.find((row) => (row.unit || row.name) === key || row.name === key);
-    if (item) item.clock = clock;
-    renderMarkers();
-  }
-
-  try {
-    const payload = await postSheet({ mode: "patch", patch });
-    if (!payload.ok) throw new Error(payload.error || "Patch failed");
-    toast(`Saved MAT ${matId}`);
-    setStatus(`Saved · ${formatTime(new Date().toISOString())}`, "ok");
-  } catch (error) {
-    toast(error.message || "Save failed");
-    setStatus(error.message || "Save failed", "err");
-    await loadSheet(false);
-  } finally {
-    select.disabled = false;
-    if (card) card.classList.remove("is-pending");
-    if (mat) renderDrawer(mat);
-  }
 }
 
 function setStatus(text, kind = "") {

@@ -1,6 +1,12 @@
-const DEFAULT_ZOOM = 17;
+const DEFAULT_ZOOM = 19;
+const FIT_EXTRA_ZOOM = 3;
+const MAX_ZOOM = 22;
 const POLL_MS = 8000;
 const API_PATH = "/api/sheet";
+const VIEW_CACHE_KEY = "mat-orientation-map-view-v1";
+const AUTH_CACHE_KEY = "mat-orientation-map-auth-v1";
+/** Public map matches local #network-map default: TCE only (no TC3). */
+const TERMINAL_FILTER = "TCE";
 
 const state = {
   map: null,
@@ -11,6 +17,9 @@ const state = {
   lastUpdatedAt: null,
   toastTimer: null,
   _didFit: false,
+  _restoring: false,
+  _mapReady: false,
+  auth: readAuthCache(),
   pending: Object.create(null),
   compass: {
     watching: false,
@@ -22,9 +31,19 @@ const state = {
 };
 
 const els = {
+  loginScreen: document.querySelector("#login-screen"),
+  loginForm: document.querySelector("#login-form"),
+  loginUser: document.querySelector("#login-user"),
+  loginPass: document.querySelector("#login-pass"),
+  loginError: document.querySelector("#login-error"),
+  loginSubmit: document.querySelector("#login-submit"),
+  app: document.querySelector("#app"),
   status: document.querySelector("#sync-status"),
+  zoomLevel: document.querySelector("#zoom-level"),
+  authUser: document.querySelector("#auth-user"),
   refresh: document.querySelector("#btn-refresh"),
   fit: document.querySelector("#btn-fit"),
+  logout: document.querySelector("#btn-logout"),
   drawer: document.querySelector("#drawer"),
   drawerTitle: document.querySelector("#drawer-title"),
   drawerMeta: document.querySelector("#drawer-meta"),
@@ -34,64 +53,215 @@ const els = {
   gpsAssist: document.querySelector("#gps-assist"),
   gpsAssistText: document.querySelector("#gps-assist-text"),
   gpsAssistBtn: document.querySelector("#gps-assist-btn"),
+  navPad: document.querySelector("#map-nav-pad"),
 };
 
-els.refresh.addEventListener("click", () => loadSheet(true));
-els.fit.addEventListener("click", fitMap);
-els.drawerClose.addEventListener("click", closeDrawer);
+els.refresh?.addEventListener("click", () => loadSheet(true));
+els.fit?.addEventListener("click", fitMap);
+els.logout?.addEventListener("click", logout);
+els.drawerClose?.addEventListener("click", closeDrawer);
 els.gpsAssistBtn?.addEventListener("click", toggleCompassAssist);
+els.navPad?.addEventListener("click", (event) => {
+  const button = event.target.closest?.("[data-pan]");
+  if (!button) return;
+  event.preventDefault();
+  panMap(button.dataset.pan);
+});
+els.loginForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void handleLogin();
+});
 
-initMap();
-loadSheet(true);
-state.pollTimer = setInterval(() => loadSheet(false), POLL_MS);
+bootstrap();
+
+async function bootstrap() {
+  if (state.auth?.token && state.auth?.user) {
+    showApp();
+    startMapApp();
+    return;
+  }
+  showLogin();
+}
+
+function showLogin() {
+  if (els.loginScreen) els.loginScreen.hidden = false;
+  if (els.app) els.app.hidden = true;
+  if (state.pollTimer) {
+    clearInterval(state.pollTimer);
+    state.pollTimer = null;
+  }
+}
+
+function showApp() {
+  if (els.loginScreen) els.loginScreen.hidden = true;
+  if (els.app) els.app.hidden = false;
+  if (els.authUser) els.authUser.textContent = state.auth?.user || "";
+}
+
+function startMapApp() {
+  if (!state._mapReady) {
+    initMap();
+    state._mapReady = true;
+  } else {
+    setTimeout(() => state.map?.invalidateSize(), 50);
+  }
+  loadSheet(true);
+  if (!state.pollTimer) {
+    state.pollTimer = setInterval(() => loadSheet(false), POLL_MS);
+  }
+}
+
+async function handleLogin() {
+  const user = String(els.loginUser?.value || "").trim();
+  const pass = String(els.loginPass?.value || "");
+  if (!user || !pass) return;
+  if (els.loginError) {
+    els.loginError.hidden = true;
+    els.loginError.textContent = "";
+  }
+  if (els.loginSubmit) els.loginSubmit.disabled = true;
+  try {
+    const payload = await postSheet({ mode: "login", user, pass }, { auth: false });
+    if (!payload.ok || !payload.token) throw new Error(payload.error || "Login failed");
+    state.auth = {
+      user: payload.user || user,
+      token: payload.token,
+      expiresAt: payload.expiresAt || null,
+    };
+    writeAuthCache(state.auth);
+    if (els.loginPass) els.loginPass.value = "";
+    showApp();
+    startMapApp();
+    toast(`Signed in as ${state.auth.user}`);
+  } catch (error) {
+    if (els.loginError) {
+      els.loginError.hidden = false;
+      els.loginError.textContent = error.message || "Login failed";
+    }
+  } finally {
+    if (els.loginSubmit) els.loginSubmit.disabled = false;
+  }
+}
+
+function logout() {
+  state.auth = null;
+  writeAuthCache(null);
+  state.selectedMatId = null;
+  closeDrawer();
+  showLogin();
+  toast("Signed out");
+}
+
+function readAuthCache() {
+  try {
+    const raw = localStorage.getItem(AUTH_CACHE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data?.token || !data?.user) return null;
+    if (data.expiresAt && Date.parse(data.expiresAt) < Date.now()) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function writeAuthCache(auth) {
+  try {
+    if (!auth) localStorage.removeItem(AUTH_CACHE_KEY);
+    else localStorage.setItem(AUTH_CACHE_KEY, JSON.stringify(auth));
+  } catch {
+    /* ignore */
+  }
+}
 
 function initMap() {
+  const cached = readViewCache();
+  const startLat = Number.isFinite(cached?.lat) ? cached.lat : 33.5731;
+  const startLng = Number.isFinite(cached?.lng) ? cached.lng : -7.5898;
+  const startZoom = Number.isFinite(cached?.zoom) ? cached.zoom : DEFAULT_ZOOM;
+
   state.map = L.map("map", {
     zoomControl: true,
     attributionControl: true,
-    maxZoom: 19,
-  }).setView([33.5731, -7.5898], DEFAULT_ZOOM);
+    maxZoom: MAX_ZOOM,
+  }).setView([startLat, startLng], startZoom);
 
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
+    maxZoom: MAX_ZOOM,
+    maxNativeZoom: 19,
     attribution: "&copy; OpenStreetMap",
   }).addTo(state.map);
 
   state.layer = L.layerGroup().addTo(state.map);
+
+  if (cached?.matId) {
+    state.selectedMatId = String(cached.matId);
+    state._didFit = true;
+  } else if (Number.isFinite(cached?.lat) && Number.isFinite(cached?.lng)) {
+    state._didFit = true;
+  }
+
+  const persist = () => {
+    updateZoomLabel();
+    if (!state._restoring) writeViewCache();
+  };
+  state.map.on("zoomend moveend", persist);
+  updateZoomLabel();
 }
 
 async function loadSheet(showBusy = false) {
+  if (!state.auth?.token) {
+    showLogin();
+    return;
+  }
   if (showBusy) setStatus("Loading Excel…");
   try {
     const payload = await postSheet({ mode: "export" });
     if (!payload.ok) throw new Error(payload.error || payload.hint || "Export failed");
-    const mats = parseSheetValues(payload.values || []);
+    const mats = parseSheetValues(payload.values || []).filter(isPublicTerminalMat);
     state.mats = mats;
     state.lastUpdatedAt = payload.updatedAt || new Date().toISOString();
     renderMarkers();
+
     if (state.selectedMatId) {
-      const still = mats.find((m) => m.matId === state.selectedMatId);
-      if (still) renderDrawer(still);
+      const still = mats.find((m) => String(m.matId) === String(state.selectedMatId));
+      if (still) openDrawer(still.matId, { focus: false, persist: false });
       else closeDrawer();
     }
+
     const withGps = mats.filter((m) => m.latitude != null && m.longitude != null).length;
-    setStatus(`Live · ${withGps}/${mats.length} MAT on map · ${formatTime(state.lastUpdatedAt)}`, "ok");
+    setStatus(`${withGps}/${mats.length} · ${formatTime(state.lastUpdatedAt)}`, "ok");
+    updateZoomLabel();
   } catch (error) {
+    if (/login|session|password|unauthorized/i.test(String(error.message || ""))) {
+      logout();
+      if (els.loginError) {
+        els.loginError.hidden = false;
+        els.loginError.textContent = error.message || "Please sign in again";
+      }
+      return;
+    }
     setStatus(error.message || "Sync failed", "err");
     if (showBusy) toast(error.message || "Could not load Excel");
   }
 }
 
-async function postSheet(body) {
+async function postSheet(body, options = {}) {
+  const withAuth = options.auth !== false;
+  const payload = { ...body };
+  if (withAuth && state.auth?.token) {
+    payload.user = state.auth.user;
+    payload.token = state.auth.token;
+  }
   const response = await fetch(API_PATH, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok && payload.error) throw new Error(payload.error);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok && data.error) throw new Error(data.error);
   if (!response.ok) throw new Error(`Sheet API ${response.status}`);
-  return payload;
+  return data;
 }
 
 function parseSheetValues(values) {
@@ -100,6 +270,7 @@ function parseSheetValues(values) {
   const latCol = headers.findIndex((h) => /^(latitude|lat)$/i.test(h));
   const lngCol = headers.findIndex((h) => /^(longitude|lng|lon)$/i.test(h));
   const termCol = headers.findIndex((h) => /^terminal$/i.test(h));
+  const historyCol = headers.findIndex((h) => /^history$/i.test(h));
 
   const mats = [];
   for (let r = 1; r < values.length; r += 1) {
@@ -107,16 +278,17 @@ function parseSheetValues(values) {
     const matId = String(row[0] ?? "").trim();
     if (!matId) continue;
 
-    const latitude = latCol >= 0 ? Number(row[latCol]) : NaN;
-    const longitude = lngCol >= 0 ? Number(row[lngCol]) : NaN;
+    const latitude = latCol >= 0 ? parseCoord(row[latCol]) : null;
+    const longitude = lngCol >= 0 ? parseCoord(row[lngCol]) : null;
     const terminal = termCol >= 0 ? String(row[termCol] ?? "").trim() : "";
+    const history = historyCol >= 0 ? parseHistory(row[historyCol]) : [];
 
     const aps = [];
     const cameras = [];
     for (let c = 1; c < headers.length - 1; c += 1) {
       if (String(headers[c + 1] || "").toLowerCase() !== "value") continue;
       const header = String(headers[c] || "").trim();
-      if (/^(terminal|latitude|longitude|lat|lng|lon)$/i.test(header)) continue;
+      if (/^(terminal|latitude|longitude|lat|lng|lon|history)$/i.test(header)) continue;
       const name = String(row[c] ?? "").trim();
       if (!name) continue;
       const clock = parseClock(row[c + 1]);
@@ -127,13 +299,45 @@ function parseSheetValues(values) {
     mats.push({
       matId,
       terminal,
-      latitude: Number.isFinite(latitude) ? latitude : null,
-      longitude: Number.isFinite(longitude) ? longitude : null,
+      latitude,
+      longitude,
       aps,
       cameras,
+      history,
     });
   }
   return mats;
+}
+
+function parseHistory(raw) {
+  if (raw == null || raw === "") return [];
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseCoord(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const n = Number(text);
+  if (!Number.isFinite(n)) return null;
+  // Empty Excel cells must not become 0,0 (Gulf of Guinea).
+  if (n === 0) return null;
+  return n;
+}
+
+function isPublicTerminalMat(mat) {
+  const term = String(mat?.terminal || "").trim().toUpperCase();
+  if (term === TERMINAL_FILTER) return true;
+  // Rows with APs named TCE-… but blank Terminal still belong on the TCE map.
+  if (!term) {
+    const names = [...(mat.aps || []), ...(mat.cameras || [])].map((d) => String(d.name || ""));
+    if (names.some((n) => /^TCE-/i.test(n))) return true;
+  }
+  return false;
 }
 
 function parseClock(value) {
@@ -307,39 +511,114 @@ function fitMap() {
 }
 
 function fitBounds(bounds) {
-  if (!bounds.length) return;
+  if (!bounds.length || !state.map) return;
   if (bounds.length === 1) {
     state.map.setView(bounds[0], DEFAULT_ZOOM, { animate: true });
+    writeViewCache();
+    updateZoomLabel();
     return;
   }
-  state.map.fitBounds(bounds, { padding: [48, 48], maxZoom: DEFAULT_ZOOM });
+  // Fit all pins, then zoom in 3 levels (same as tapping + three times).
+  state.map.fitBounds(bounds, { padding: [36, 36], maxZoom: DEFAULT_ZOOM, animate: false });
+  const nextZoom = Math.min(state.map.getMaxZoom(), state.map.getZoom() + FIT_EXTRA_ZOOM);
+  state.map.setZoom(nextZoom, { animate: false });
+  writeViewCache();
+  updateZoomLabel();
 }
 
-function openDrawer(matId) {
-  const mat = state.mats.find((item) => item.matId === matId);
+function openDrawer(matId, options = {}) {
+  const focus = options.focus !== false;
+  const persist = options.persist !== false;
+  const mat = state.mats.find((item) => String(item.matId) === String(matId));
   if (!mat) return;
-  state.selectedMatId = matId;
+  state.selectedMatId = mat.matId;
+  document.getElementById("app")?.classList.add("has-drawer");
   renderMarkers();
-  if (mat.latitude != null && mat.longitude != null) {
-    state.map.setView([mat.latitude, mat.longitude], DEFAULT_ZOOM, { animate: true });
+  if (focus && mat.latitude != null && mat.longitude != null) {
+    const zoom = Math.max(state.map.getZoom(), DEFAULT_ZOOM);
+    state.map.setView([mat.latitude, mat.longitude], zoom, { animate: true });
   }
   renderDrawer(mat);
   els.drawer.hidden = false;
+  if (persist) writeViewCache();
 }
 
 function closeDrawer() {
   state.selectedMatId = null;
+  document.getElementById("app")?.classList.remove("has-drawer");
   els.drawer.hidden = true;
   renderMarkers();
+  writeViewCache();
+}
+
+function readViewCache() {
+  try {
+    const raw = localStorage.getItem(VIEW_CACHE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== "object") return null;
+    return {
+      lat: Number(data.lat),
+      lng: Number(data.lng),
+      zoom: Number(data.zoom),
+      matId: data.matId != null && data.matId !== "" ? String(data.matId) : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeViewCache() {
+  if (!state.map) return;
+  try {
+    const center = state.map.getCenter();
+    localStorage.setItem(
+      VIEW_CACHE_KEY,
+      JSON.stringify({
+        lat: center.lat,
+        lng: center.lng,
+        zoom: state.map.getZoom(),
+        matId: state.selectedMatId,
+        at: Date.now(),
+      }),
+    );
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function updateZoomLabel() {
+  if (!els.zoomLevel || !state.map) return;
+  els.zoomLevel.textContent = `z${state.map.getZoom()}`;
+}
+
+function panMap(direction) {
+  if (!state.map || !window.L) return;
+  const size = state.map.getSize();
+  const stepX = Math.max(120, Math.round(size.x * 0.4));
+  const stepY = Math.max(120, Math.round(size.y * 0.4));
+  const moves = {
+    left: [-stepX, 0],
+    right: [stepX, 0],
+    up: [0, -stepY],
+    down: [0, stepY],
+  };
+  const delta = moves[direction];
+  if (!delta) return;
+  state.map.panBy(delta, { animate: true, duration: 0.25 });
 }
 
 function renderDrawer(mat) {
   els.drawerTitle.textContent = `MAT ${mat.matId}`;
-  const gps =
-    mat.latitude != null && mat.longitude != null
-      ? `${mat.latitude}, ${mat.longitude}`
-      : "No GPS in Excel";
-  els.drawerMeta.textContent = `${mat.terminal || ""} · ${mat.aps.length} AP · ${mat.cameras.length} cam · ${gps}`.replace(/^ · /, "");
+  if (els.drawerMeta) {
+    const bits = [];
+    if (mat.aps.length) bits.push(`${mat.aps.length} AP`);
+    if (mat.cameras.length) bits.push(`${mat.cameras.length} cam`);
+    const last = (mat.history || [])[mat.history.length - 1];
+    if (last?.user) bits.push(`last: ${last.user}`);
+    els.drawerMeta.textContent = bits.join(" · ");
+    els.drawerMeta.hidden = bits.length === 0;
+  }
   updateGpsAssistUi();
 
   const estimated = state.compass.estimatedClock;
@@ -357,6 +636,7 @@ function renderDrawer(mat) {
       ${renderClockCard("camera", cam.name, "Camera", cam.clock, estimated, mat.matId)}
     </div>`);
   }
+  cards.push(renderHistoryBlock(mat.history || []));
   els.drawerBody.innerHTML = cards.length
     ? cards.join("")
     : `<div class="sync-status">No APs or cameras on this MAT row</div>`;
@@ -386,6 +666,31 @@ function renderDrawer(mat) {
       });
     });
   });
+}
+
+function renderHistoryBlock(history) {
+  const items = [...(history || [])].slice(-12).reverse();
+  if (!items.length) {
+    return `<div class="history-block"><div class="history-title">Edits</div><p class="history-empty">No edits yet</p></div>`;
+  }
+  const rows = items.map((entry) => {
+    const text = entry.detail || formatHistoryEntry(entry);
+    return `<li>${escapeHtml(text)}</li>`;
+  }).join("");
+  return `<div class="history-block"><div class="history-title">Edits</div><ul class="history-list">${rows}</ul></div>`;
+}
+
+function formatHistoryEntry(entry) {
+  const kind = String(entry.kind || "").toUpperCase() || "DEV";
+  const key = entry.key || "?";
+  const when = entry.at ? formatTime(entry.at) : "";
+  if (entry.action === "clear") {
+    return `cleared ${kind} ${key}${entry.from != null ? ` (was ${entry.from})` : ""}${when ? ` · ${when}` : ""}`;
+  }
+  if (entry.action === "change") {
+    return `changed ${kind} ${key} ${entry.from ?? "—"} → ${entry.to}${when ? ` · ${when}` : ""}`;
+  }
+  return `set ${kind} ${key} → ${entry.to}${when ? ` · ${when}` : ""}`;
 }
 
 function renderClockCard(kind, key, subtitle, clock, estimated, matId) {
@@ -441,9 +746,17 @@ async function saveOrientation({ matId, kind, key, clock }) {
   try {
     const payload = await postSheet({ mode: "patch", patch });
     if (!payload.ok) throw new Error(payload.error || "Patch failed");
+    if (mat && Array.isArray(payload.history)) {
+      mat.history = payload.history;
+      if (state.selectedMatId === matId) renderDrawer(mat);
+    }
     toast(clock == null ? `${key} cleared` : `${key} → ${clock}`);
     setStatus(`Saved · ${formatTime(new Date().toISOString())}`, "ok");
   } catch (error) {
+    if (/login|session|password|unauthorized/i.test(String(error.message || ""))) {
+      logout();
+      return;
+    }
     toast(error.message || "Save failed");
     setStatus(error.message || "Save failed", "err");
     await loadSheet(false);
@@ -455,19 +768,24 @@ async function saveOrientation({ matId, kind, key, clock }) {
 }
 
 function updateGpsAssistUi() {
-  if (!els.gpsAssist || !els.gpsAssistText || !els.gpsAssistBtn) return;
-  const { watching, estimatedClock, heading, error } = state.compass;
+  if (!els.gpsAssist || !els.gpsAssistBtn) return;
+  const { watching, estimatedClock, error } = state.compass;
   els.gpsAssist.classList.toggle("is-active", watching);
   els.gpsAssist.classList.toggle("is-ready", estimatedClock != null);
-  els.gpsAssistBtn.textContent = watching ? "Stop GPS" : "Activate GPS";
+  els.gpsAssistBtn.textContent = watching ? "Stop" : "GPS";
+  if (!els.gpsAssistText) return;
   if (error) {
-    els.gpsAssistText.textContent = error;
+    els.gpsAssistText.hidden = false;
+    els.gpsAssistText.textContent = "Denied";
   } else if (watching && estimatedClock != null) {
-    els.gpsAssistText.innerHTML = `Phone ~${heading != null ? `${Math.round(heading)}°` : "—"} → suggest <b>${estimatedClock}</b>. Beach = <b>12</b>. Tap hour on each dial.`;
+    els.gpsAssistText.hidden = false;
+    els.gpsAssistText.textContent = `→ ${estimatedClock}`;
   } else if (watching) {
-    els.gpsAssistText.innerHTML = `Point phone to the <b>beach (12)</b>, then toward each AP or camera.`;
+    els.gpsAssistText.hidden = false;
+    els.gpsAssistText.textContent = "On";
   } else {
-    els.gpsAssistText.innerHTML = `Turn it on to find the <b>beach (12)</b>, then set each AP and camera on the horloge.`;
+    els.gpsAssistText.hidden = true;
+    els.gpsAssistText.textContent = "";
   }
 }
 
@@ -479,8 +797,17 @@ function toggleCompassAssist() {
   startCompassAssist();
 }
 
-function startCompassAssist() {
+async function startCompassAssist() {
   state.compass.error = null;
+  updateGpsAssistUi();
+
+  // Location prompt first (native browser “Allow location?” popup).
+  const gpsOk = await requestGpsFix();
+  if (!gpsOk) {
+    updateGpsAssistUi();
+    return;
+  }
+
   let lastUi = 0;
   const onOrientation = (event) => {
     const heading = Number.isFinite(event.webkitCompassHeading)
@@ -501,47 +828,65 @@ function startCompassAssist() {
     window.addEventListener("deviceorientation", onOrientation, true);
     state.compass.watching = true;
     state.compass._onOrientation = onOrientation;
-    toast("GPS/compass on — beach is 12");
+    toast("GPS on · beach = 12");
     updateGpsAssistUi();
   };
+
   if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
-    DeviceOrientationEvent.requestPermission()
-      .then((permission) => {
-        if (permission !== "granted") {
-          state.compass.error = "Allow motion/compass so we can show beach direction";
-          toast(state.compass.error);
-          updateGpsAssistUi();
-          return;
-        }
-        bind();
-        requestGpsFix();
-      })
-      .catch(() => {
-        state.compass.error = "Unable to enable compass on this device";
-        toast(state.compass.error);
+    try {
+      const permission = await DeviceOrientationEvent.requestPermission();
+      if (permission !== "granted") {
+        state.compass.error = "Motion denied";
+        toast("Allow motion for compass");
+        // Still mark GPS active so location was granted.
+        state.compass.watching = true;
         updateGpsAssistUi();
-      });
+        return;
+      }
+      bind();
+    } catch {
+      state.compass.error = "No compass";
+      state.compass.watching = true;
+      toast("GPS on · set clocks manually");
+      updateGpsAssistUi();
+    }
     return;
   }
   if (!window.DeviceOrientationEvent) {
-    state.compass.error = "No compass here — set each AP/camera manually on the dial";
-    toast(state.compass.error);
+    state.compass.watching = true;
+    toast("GPS on · set clocks manually");
     updateGpsAssistUi();
     return;
   }
   bind();
-  requestGpsFix();
 }
 
 function requestGpsFix() {
-  if (!navigator.geolocation) return;
-  navigator.geolocation.getCurrentPosition(
-    () => toast("GPS ready — beach is 12 on the clock"),
-    (error) => {
-      if (error?.code === 1) toast("Allow location to help find beach direction");
-    },
-    { enableHighAccuracy: true, timeout: 10000 },
-  );
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) {
+      state.compass.error = "No GPS";
+      toast("GPS not available");
+      resolve(false);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      () => {
+        toast("Location allowed");
+        resolve(true);
+      },
+      (error) => {
+        if (error?.code === 1) {
+          state.compass.error = "Location denied";
+          toast("Allow location when prompted");
+        } else {
+          state.compass.error = "GPS failed";
+          toast("Could not get location");
+        }
+        resolve(false);
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+    );
+  });
 }
 
 function stopCompassAssist() {

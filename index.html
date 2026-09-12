@@ -5,42 +5,60 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>MAT Orientation Map</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="./styles.css?v=3" />
+  <link rel="stylesheet" href="./styles.css?v=9" />
 </head>
 <body>
-  <div id="app">
+  <div id="login-screen" class="login-screen">
+    <form id="login-form" class="login-card" autocomplete="on">
+      <strong>MAT · TCE</strong>
+      <p>Sign in with your Excel <b>profiles</b> user</p>
+      <label>
+        User
+        <input id="login-user" name="username" type="text" autocomplete="username" required />
+      </label>
+      <label>
+        Password
+        <input id="login-pass" name="password" type="password" autocomplete="current-password" required />
+      </label>
+      <button type="submit" id="login-submit" class="ghost login-submit">Sign in</button>
+      <span id="login-error" class="login-error" hidden></span>
+    </form>
+  </div>
+
+  <div id="app" hidden>
     <header class="topbar">
-      <div>
-        <strong>MAT Orientation</strong>
-        <span id="sync-status" class="sync-status">Loading Excel…</span>
+      <div class="topbar-text">
+        <strong>MAT · TCE</strong>
+        <span id="sync-status" class="sync-status">…</span>
       </div>
+      <span id="zoom-level" class="zoom-level" title="Map zoom">z—</span>
+      <span id="auth-user" class="auth-user" title="Signed in"></span>
       <div class="topbar-actions">
-        <button type="button" id="btn-refresh" class="ghost">Refresh</button>
-        <button type="button" id="btn-fit" class="ghost">Fit</button>
+        <button type="button" id="btn-refresh" class="ghost" title="Refresh">↻</button>
+        <button type="button" id="btn-fit" class="ghost" title="Fit">Fit</button>
+        <button type="button" id="btn-logout" class="ghost" title="Sign out">Out</button>
       </div>
     </header>
     <main id="map" aria-label="MAT orientation map"></main>
+    <div class="map-nav-pad" id="map-nav-pad" aria-label="Pan map">
+      <button type="button" class="map-nav-btn map-nav-up" data-pan="up" title="Up" aria-label="Pan up">▲</button>
+      <button type="button" class="map-nav-btn map-nav-left" data-pan="left" title="Left" aria-label="Pan left">◀</button>
+      <button type="button" class="map-nav-btn map-nav-right" data-pan="right" title="Right" aria-label="Pan right">▶</button>
+      <button type="button" class="map-nav-btn map-nav-down" data-pan="down" title="Down" aria-label="Pan down">▼</button>
+    </div>
     <aside id="drawer" class="drawer" hidden>
-      <div class="drawer-head">
-        <div>
-          <span class="panel-kicker">Horloge</span>
-          <h2 id="drawer-title">MAT</h2>
-          <p id="drawer-meta"></p>
-        </div>
-        <button type="button" id="drawer-close" class="ghost" aria-label="Close">✕</button>
-      </div>
-      <div class="gps-assist" id="gps-assist">
-        <div>
-          <strong>Activate GPS / compass</strong>
-          <p id="gps-assist-text">Turn it on to find the <b>beach (12)</b>, then set each AP and camera.</p>
-        </div>
-        <button type="button" id="gps-assist-btn" class="ghost">Activate GPS</button>
+      <div class="drawer-bar" id="gps-assist">
+        <h2 id="drawer-title">MAT</h2>
+        <span id="drawer-meta" class="drawer-meta" hidden></span>
+        <span id="gps-assist-text" class="gps-chip" hidden></span>
+        <button type="button" id="gps-assist-btn" class="ghost gps-btn">GPS</button>
+        <button type="button" id="drawer-close" class="ghost icon-btn" aria-label="Close">✕</button>
       </div>
       <div id="drawer-body" class="drawer-body"></div>
     </aside>
   </div>
   <div id="toast" class="toast" hidden></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="./app.js?v=3" defer></script>
+  <script src="./app.js?v=9" defer></script>
 </body>
 </html>

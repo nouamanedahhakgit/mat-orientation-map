@@ -270,7 +270,7 @@ function parseSheetValues(values) {
   const latCol = headers.findIndex((h) => /^(latitude|lat)$/i.test(h));
   const lngCol = headers.findIndex((h) => /^(longitude|lng|lon)$/i.test(h));
   const termCol = headers.findIndex((h) => /^terminal$/i.test(h));
-  const historyCol = headers.findIndex((h) => /^history$/i.test(h));
+  const historyCol = headers.findIndex((h) => /^(history|user)$/i.test(h));
 
   const mats = [];
   for (let r = 1; r < values.length; r += 1) {
@@ -288,7 +288,7 @@ function parseSheetValues(values) {
     for (let c = 1; c < headers.length - 1; c += 1) {
       if (String(headers[c + 1] || "").toLowerCase() !== "value") continue;
       const header = String(headers[c] || "").trim();
-      if (/^(terminal|latitude|longitude|lat|lng|lon|history)$/i.test(header)) continue;
+      if (/^(terminal|latitude|longitude|lat|lng|lon|history|user)$/i.test(header)) continue;
       const name = String(row[c] ?? "").trim();
       if (!name) continue;
       const clock = parseClock(row[c + 1]);
@@ -313,10 +313,13 @@ function parseHistory(raw) {
   if (raw == null || raw === "") return [];
   try {
     const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-    return Array.isArray(parsed) ? parsed : [];
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === "object") return [parsed];
   } catch {
-    return [];
+    const str = String(raw).trim();
+    if (str) return [{ user: str, detail: `Modifié par ${str}`, action: "edit" }];
   }
+  return [];
 }
 
 function parseCoord(value) {
@@ -666,31 +669,43 @@ function renderDrawer(mat) {
       });
     });
   });
+  els.drawerBody.querySelectorAll("[data-clear-device]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      void saveOrientation({
+        matId: button.dataset.matId,
+        kind: button.dataset.kind,
+        key: button.dataset.key,
+        clock: null,
+      });
+    });
+  });
 }
 
 function renderHistoryBlock(history) {
-  const items = [...(history || [])].slice(-12).reverse();
+  const items = [...(history || [])].slice(-15).reverse();
   if (!items.length) {
     return `<div class="history-block"><div class="history-title">Edits</div><p class="history-empty">No edits yet</p></div>`;
   }
   const rows = items.map((entry) => {
-    const text = entry.detail || formatHistoryEntry(entry);
-    return `<li>${escapeHtml(text)}</li>`;
+    const text = entry.detail ? escapeHtml(entry.detail) : formatHistoryEntry(entry);
+    return `<li>${text}</li>`;
   }).join("");
   return `<div class="history-block"><div class="history-title">Edits</div><ul class="history-list">${rows}</ul></div>`;
 }
 
 function formatHistoryEntry(entry) {
+  const user = entry.user ? `<strong>${escapeHtml(entry.user)}</strong>: ` : "";
   const kind = String(entry.kind || "").toUpperCase() || "DEV";
   const key = entry.key || "?";
   const when = entry.at ? formatTime(entry.at) : "";
   if (entry.action === "clear") {
-    return `cleared ${kind} ${key}${entry.from != null ? ` (was ${entry.from})` : ""}${when ? ` · ${when}` : ""}`;
+    return `${user}cleared ${kind} ${key}${entry.from != null ? ` (was ${entry.from})` : ""}${when ? ` · ${when}` : ""}`;
   }
   if (entry.action === "change") {
-    return `changed ${kind} ${key} ${entry.from ?? "—"} → ${entry.to}${when ? ` · ${when}` : ""}`;
+    return `${user}changed ${kind} ${key} ${entry.from ?? "—"} → ${entry.to}${when ? ` · ${when}` : ""}`;
   }
-  return `set ${kind} ${key} → ${entry.to}${when ? ` · ${when}` : ""}`;
+  return `${user}set ${kind} ${key} → ${entry.to}${when ? ` · ${when}` : ""}`;
 }
 
 function renderClockCard(kind, key, subtitle, clock, estimated, matId) {
@@ -704,7 +719,10 @@ function renderClockCard(kind, key, subtitle, clock, estimated, matId) {
           <strong>${escapeHtml(key)}</strong>
           <small>${escapeHtml(subtitle || "")}</small>
         </div>
-        <div class="clock-value">${clock != null ? clock : "—"}</div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          ${clock != null ? `<button type="button" class="ghost clock-clear-btn" style="font-size:10px;padding:2px 6px;color:#ff6b6b;" data-clear-device data-kind="${escapeHtml(kind)}" data-key="${escapeHtml(key)}" data-mat-id="${escapeHtml(matId)}" ${pending ? "disabled" : ""}>Clear</button>` : ""}
+          <div class="clock-value">${clock != null ? clock : "—"}</div>
+        </div>
       </div>
       <div class="clock-face" aria-label="Clock orientation for ${escapeHtml(key)}">
         <span class="clock-beach">Beach · 12</span>

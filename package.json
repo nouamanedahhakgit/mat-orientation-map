@@ -1,0 +1,10 @@
+{
+  "name": "mat-orientation-public",
+  "version": "1.0.0",
+  "description": "Public MAT Orientation Map with profiles auth and live sheet edit tracking",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check app.js"
+  }
+}

@@ -92,7 +92,10 @@ const els = {
 };
 
 els.refresh?.addEventListener("click", () => loadSheet(true));
-els.fit?.addEventListener("click", fitMap);
+els.fit?.addEventListener("click", () => {
+  fitMap();
+  toast("Vue ajustée sur tous les MATs");
+});
 els.logout?.addEventListener("click", logout);
 els.drawerClose?.addEventListener("click", closeDrawer);
 els.btnGpsToggle?.addEventListener("click", () => toggleGps());
@@ -247,10 +250,8 @@ function initMap() {
 
   if (cached?.matId) {
     state.selectedMatId = String(cached.matId);
-    state._didFit = true;
-  } else if (Number.isFinite(cached?.lat) && Number.isFinite(cached?.lng)) {
-    state._didFit = true;
   }
+  state._didFit = false;
 
   const persist = () => {
     updateZoomLabel();
@@ -258,6 +259,10 @@ function initMap() {
   };
   state.map.on("zoomend moveend", persist);
   updateZoomLabel();
+
+  window.addEventListener("resize", () => {
+    state.map?.invalidateSize();
+  });
 }
 
 async function loadSheet(showBusy = false) {
@@ -471,9 +476,11 @@ function renderMarkers() {
     }
   }
 
-  if (bounds.length && !state._didFit && !state.selectedMatId) {
-    fitBounds(bounds);
-    state._didFit = true;
+  if (bounds.length && !state._didFit) {
+    setTimeout(() => {
+      fitMap();
+      state._didFit = true;
+    }, 80);
   }
 }
 
@@ -558,8 +565,18 @@ function hashSeed(text) {
   return h >>> 0;
 }
 
+function getBeachRotation() {
+  if (state.horlogeMode !== "adapted") return 0;
+  if (state.compass.watching && Number.isFinite(state.compass.heading)) {
+    return ((BEACH_BEARING - state.compass.heading) % 360 + 360) % 360;
+  }
+  return BEACH_BEARING; // 58° NE
+}
+
 function matClockMarkerHtml(mat, devices, selected = false) {
   const hub = `${mat.aps.length}·${mat.cameras.length}`;
+  const isAdapted = state.horlogeMode === "adapted";
+  const rot = getBeachRotation();
   const nodes = devices
     .map((device) => {
       const deg = (device.deg || 0) + (device.degJitter || 0);
@@ -572,7 +589,7 @@ function matClockMarkerHtml(mat, devices, selected = false) {
     .map((h) => `<i class="mat-clock-tick" style="--deg:${(h % 12) * 30}deg">${h === 12 ? "12" : h}</i>`)
     .join("");
   return `<div class="mat-clock-marker${selected ? " is-selected" : ""}" title="MAT ${escapeHtml(mat.matId)}">
-    <div class="mat-clock-ring">
+    <div class="mat-clock-ring ${isAdapted ? "is-adapted" : ""}" style="--ring-rot:${rot}deg">
       <span class="mat-clock-beach" title="Beach · 12">B</span>
       ${ticks}
       ${nodes}
@@ -583,24 +600,27 @@ function matClockMarkerHtml(mat, devices, selected = false) {
 }
 
 function fitMap() {
+  if (!state.map) return;
+  state.map.invalidateSize();
   const bounds = state.mats
     .filter((m) => m.latitude != null && m.longitude != null)
     .map((m) => [m.latitude, m.longitude]);
+  if (!bounds.length) return;
   fitBounds(bounds);
 }
 
 function fitBounds(bounds) {
   if (!bounds.length || !state.map) return;
+  state.map.invalidateSize();
   if (bounds.length === 1) {
     state.map.setView(bounds[0], DEFAULT_ZOOM, { animate: true });
     writeViewCache();
     updateZoomLabel();
     return;
   }
-  // Fit all pins, then zoom in 3 levels (same as tapping + three times).
-  state.map.fitBounds(bounds, { padding: [36, 36], maxZoom: DEFAULT_ZOOM, animate: false });
-  const nextZoom = Math.min(state.map.getMaxZoom(), state.map.getZoom() + FIT_EXTRA_ZOOM);
-  state.map.setZoom(nextZoom, { animate: false });
+  const isMobile = window.innerWidth <= 768;
+  const padding = isMobile ? [18, 18] : [36, 36];
+  state.map.fitBounds(bounds, { padding, maxZoom: 17, animate: true });
   writeViewCache();
   updateZoomLabel();
 }
@@ -613,6 +633,9 @@ function openDrawer(matId, options = {}) {
   state.selectedMatId = mat.matId;
   document.getElementById("app")?.classList.add("has-drawer");
   renderMarkers();
+  setTimeout(() => {
+    state.map?.invalidateSize();
+  }, 180);
   if (focus && mat.latitude != null && mat.longitude != null) {
     const zoom = Math.max(state.map.getZoom(), DEFAULT_ZOOM);
     state.map.setView([mat.latitude, mat.longitude], zoom, { animate: true });
@@ -628,6 +651,9 @@ function closeDrawer() {
   els.drawer.hidden = true;
   renderMarkers();
   writeViewCache();
+  setTimeout(() => {
+    state.map?.invalidateSize();
+  }, 180);
 }
 
 function readViewCache() {
@@ -796,6 +822,9 @@ function renderClockCard(kind, key, subtitle, clock, estimated, matId) {
   const hours = [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
   const pendingKey = `${matId}:${kind}:${key}`;
   const pending = Boolean(state.pending[pendingKey]);
+  const isAdapted = state.horlogeMode === "adapted";
+  const dialRot = getBeachRotation();
+
   return `
     <article class="clock-card ${pending ? "is-pending" : ""}" data-kind="${escapeHtml(kind)}" data-key="${escapeHtml(key)}" data-mat-id="${escapeHtml(matId)}">
       <div class="clock-card-head">
@@ -805,10 +834,10 @@ function renderClockCard(kind, key, subtitle, clock, estimated, matId) {
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
           ${clock != null ? `<button type="button" class="ghost clock-clear-btn" style="font-size:10px;padding:2px 6px;color:#ff6b6b;" data-clear-device data-kind="${escapeHtml(kind)}" data-key="${escapeHtml(key)}" data-mat-id="${escapeHtml(matId)}" ${pending ? "disabled" : ""}>Clear</button>` : ""}
-          <div class="clock-value">${clock != null ? clock : "—"}</div>
+          <div class="clock-value">${clock != null ? `${clock}h` : "—"}</div>
         </div>
       </div>
-      <div class="clock-face" aria-label="Cadran pour ${escapeHtml(key)}">
+      <div class="clock-face ${isAdapted ? "is-adapted" : ""}" style="--dial-rot:${dialRot}deg" aria-label="Cadran pour ${escapeHtml(key)}">
         <span class="clock-beach">Beach · 12</span>
         ${hours.map((hour) => {
           const angle = (hour % 12) * 30;
@@ -821,6 +850,7 @@ function renderClockCard(kind, key, subtitle, clock, estimated, matId) {
             ${pending ? "disabled" : ""}>${hour}</button>`;
         }).join("")}
         <span class="clock-center"></span>
+        ${clock != null ? `<div class="clock-pointer" style="--ptr-deg:${(clock % 12) * 30}deg"></div>` : ""}
       </div>
       <div class="clock-save-status" ${pending ? "" : "hidden"}>${pending ? "Enregistrement…" : ""}</div>
       ${estimated != null
@@ -1239,28 +1269,41 @@ function setHorlogeMode(mode) {
   }
   if (els.horlogeFooterHint) {
     els.horlogeFooterHint.textContent = isAdapted
-      ? "Mode Adapté : la boussole tourne le cadran pour que 12h pointe toujours vers la plage."
+      ? "Mode Adapté : AP et Caméras orientés selon la plage physique (Beach=12h)."
       : "Mode Normal : cadran fixe. Placez-vous face à la plage physique pour régler l'orientation.";
   }
 
+  // Re-render map markers so clock rings immediately adopt the beach orientation
+  renderMarkers();
+
   if (isAdapted) {
     if (!state.compass.watching) void startCompass();
-    updateHorlogeDial(state.compass.heading);
+    updateHorlogeDial(state.compass.heading != null ? state.compass.heading : BEACH_BEARING);
   } else {
-    // Reset dial to static 0 rotation (12 at top)
+    // Reset dials to static 0 rotation (12 at top)
     if (els.horlogeRotatingDial) {
       els.horlogeRotatingDial.style.transform = "none";
     }
     if (els.horlogeAimValue) {
       els.horlogeAimValue.textContent = "12h (Plage en face)";
     }
+    document.querySelectorAll(".clock-face").forEach((face) => {
+      face.classList.remove("is-adapted");
+      face.style.setProperty("--dial-rot", "0deg");
+    });
+    document.querySelectorAll(".mat-clock-ring").forEach((ring) => {
+      ring.classList.remove("is-adapted");
+      ring.style.setProperty("--ring-rot", "0deg");
+    });
   }
 
-  // Refresh drawer cards if open to update suggestions
+  // Refresh drawer cards if open to update AP and camera dials
   if (state.selectedMatId) {
     const mat = state.mats.find((m) => String(m.matId) === String(state.selectedMatId));
     if (mat) renderDrawer(mat);
   }
+
+  toast(isAdapted ? "🏖️ Mode Adapté : AP et Caméras orientés selon la plage (12h)" : "⏱️ Mode Normal : cadran fixe");
 }
 
 function toggleHorlogeMode() {
@@ -1346,6 +1389,16 @@ function updateHorlogeDial(heading) {
   if (els.horlogeHeadingValue) {
     els.horlogeHeadingValue.textContent = `${Math.round(heading)}°`;
   }
+
+  // Rotate all AP and Camera dials in drawer in real time:
+  document.querySelectorAll(".clock-face.is-adapted").forEach((face) => {
+    face.style.setProperty("--dial-rot", `${relBeach}deg`);
+  });
+
+  // Rotate all AP and Camera clock rings on the map in real time:
+  document.querySelectorAll(".mat-clock-ring.is-adapted").forEach((ring) => {
+    ring.style.setProperty("--ring-rot", `${relBeach}deg`);
+  });
 
   // Update user gps marker cone heading if active
   const cone = document.getElementById("user-gps-cone");

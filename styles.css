@@ -439,14 +439,20 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); 
 }
 .clock-face {
   position: relative;
-  width: 168px;
-  height: 168px;
-  margin: 4px auto;
+  width: 172px;
+  height: 172px;
+  margin: 6px auto;
   border-radius: 50%;
   border: 1px solid rgba(110,140,155,.35);
   background:
     radial-gradient(circle at center, rgba(53,214,208,.08) 0 18%, transparent 19%),
     repeating-conic-gradient(from -15deg, rgba(255,255,255,.03) 0 30deg, transparent 0 60deg);
+  transform: rotate(var(--dial-rot, 0deg));
+  transition: transform 0.3s ease;
+}
+.clock-face.is-adapted {
+  border-color: rgba(62, 199, 255, 0.5);
+  box-shadow: 0 0 14px rgba(62, 199, 255, 0.2);
 }
 .clock-beach {
   position: absolute;
@@ -454,9 +460,14 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); 
   top: 8px;
   transform: translateX(-50%);
   font-size: 0.55rem;
+  font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: #6fd6cf;
+  color: #3ec7ff;
+  background: rgba(14, 45, 65, 0.85);
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(62, 199, 255, 0.4);
   z-index: 2;
   pointer-events: none;
 }
@@ -469,6 +480,7 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); 
   margin: -4px 0 0 -4px;
   border-radius: 50%;
   background: #9fe8e2;
+  z-index: 3;
 }
 .clock-hour {
   position: absolute;
@@ -484,12 +496,41 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); 
   font-size: 0.68rem;
   font-weight: 700;
   cursor: pointer;
-  transform: rotate(var(--deg)) translateY(-68px) rotate(calc(-1 * var(--deg)));
+  transform: rotate(var(--deg)) translateY(-68px) rotate(calc(-1 * var(--deg) - var(--dial-rot, 0deg)));
+  transition: transform 0.3s ease, background 0.15s ease, border-color 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .clock-hour:hover { border-color: rgba(53,214,208,.55); color: #fff; }
 .clock-hour.active { background: rgba(53,214,208,.22); border-color: #35d6d0; color: #9fe8e2; }
 .clock-hour.suggest:not(.active) { box-shadow: 0 0 0 2px rgba(246,170,76,.45); }
 .clock-hour:disabled { opacity: 0.55; cursor: wait; }
+.clock-pointer {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 2px;
+  height: 58px;
+  margin-left: -1px;
+  margin-top: -58px;
+  background: linear-gradient(to top, rgba(62, 199, 255, 0.15), #3ec7ff);
+  transform-origin: bottom center;
+  transform: rotate(var(--ptr-deg, 0deg));
+  pointer-events: none;
+  z-index: 1;
+}
+.clock-pointer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3ec7ff;
+  box-shadow: 0 0 6px #3ec7ff;
+}
 .clock-card.is-pending { opacity: 0.75; pointer-events: none; }
 .clock-save-status { font-size: 0.68rem; color: #9fe8e2; text-align: center; }
 .clock-apply { width: 100%; }
@@ -526,6 +567,11 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); 
     conic-gradient(from 0deg, rgba(62, 120, 150, 0.18), rgba(30, 58, 78, 0.55) 50%, rgba(62, 120, 150, 0.18));
   border: 1px solid rgba(180, 220, 240, 0.35);
   box-shadow: 0 0 0 3px rgba(8, 20, 30, 0.55), 0 8px 18px rgba(0, 0, 0, 0.4);
+  transform: rotate(var(--ring-rot, 0deg));
+  transition: transform 0.3s ease;
+}
+.mat-clock-ring.is-adapted {
+  border-color: rgba(62, 199, 255, 0.55);
 }
 .mat-clock-beach {
   position: absolute;
@@ -550,18 +596,19 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); 
   width: 12px;
   margin-left: -6px;
   margin-top: -6px;
-  transform: rotate(var(--deg)) translateY(-34px) rotate(calc(var(--deg) * -1));
+  transform: rotate(var(--deg)) translateY(-34px) rotate(calc(-1 * var(--deg) - var(--ring-rot, 0deg)));
   font-size: 7px;
   font-style: normal;
   font-weight: 700;
   color: rgba(180, 210, 225, 0.55);
   text-align: center;
   pointer-events: none;
+  transition: transform 0.3s ease;
 }
 .mat-clock-hub {
   position: absolute;
   inset: 50% auto auto 50%;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) rotate(calc(-1 * var(--ring-rot, 0deg)));
   z-index: 2;
   min-width: 28px;
   height: 28px;

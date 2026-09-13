@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>MAT Orientation Map</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="./styles.css?v=11" />
+  <link rel="stylesheet" href="./styles.css?v=12" />
 </head>
 <body>
   <div id="login-screen" class="login-screen">
@@ -37,7 +37,7 @@
         <div class="topbar-actions">
           <button type="button" id="btn-gps-toggle" class="ghost topbar-btn" title="Activer / Localiser GPS">📍 GPS</button>
           <button type="button" id="btn-horloge-toggle" class="ghost topbar-btn" title="Afficher l'Horloge / Boussole">🧭 Horloge</button>
-          <button type="button" id="btn-fit" class="ghost" title="Fit">Fit</button>
+          <button type="button" id="btn-fit" class="ghost topbar-btn" title="Centrer et adapter tous les MATs sur l'écran">⛶ Fit</button>
           <button type="button" id="btn-refresh" class="ghost" title="Refresh">↻</button>
           <button type="button" id="btn-logout" class="ghost" title="Sign out">Out</button>
         </div>
@@ -148,6 +148,6 @@
   </div>
   <div id="toast" class="toast" hidden></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="./app.js?v=11" defer></script>
+  <script src="./app.js?v=12" defer></script>
 </body>
 </html>

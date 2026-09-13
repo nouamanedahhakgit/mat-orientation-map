@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>MAT Orientation Map</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="./styles.css?v=13" />
+  <link rel="stylesheet" href="./styles.css?v=14" />
 </head>
 <body>
   <div id="login-screen" class="login-screen">
@@ -149,6 +149,13 @@
       </div>
     </div>
 
+    <!-- Real-Time Closest MAT indicator -->
+    <div id="closest-mat-pill" class="closest-mat-pill" hidden title="Cliquer pour afficher ce MAT">
+      <span class="pill-badge">Le + proche</span>
+      <strong id="closest-mat-name" class="pill-name">MAT —</strong>
+      <span id="closest-mat-dist" class="pill-dist">📍 —</span>
+    </div>
+
     <div class="map-nav-pad" id="map-nav-pad" aria-label="Pan map">
       <button type="button" class="map-nav-btn map-nav-up" data-pan="up" title="Up" aria-label="Pan up">▲</button>
       <button type="button" class="map-nav-btn map-nav-left" data-pan="left" title="Left" aria-label="Pan left">◀</button>
@@ -169,6 +176,6 @@
   </div>
   <div id="toast" class="toast" hidden></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="./app.js?v=13" defer></script>
+  <script src="./app.js?v=14" defer></script>
 </body>
 </html>

@@ -50,7 +50,7 @@ const state = {
   horlogeOpen: false,
   searchQuery: "",
   searchResults: [],
-  searchSelectedIndex: -1,
+  closestMatId: null,
   gps: {
     watching: false,
     watchId: null,
@@ -60,6 +60,7 @@ const state = {
     heading: null,
     marker: null,
     circle: null,
+    distanceLine: null,
     error: null,
   },
   compass: {
@@ -92,6 +93,10 @@ const els = {
   searchInput: document.querySelector("#mat-search-input"),
   searchClear: document.querySelector("#btn-search-clear"),
   searchDropdown: document.querySelector("#search-dropdown"),
+  // Real-Time Closest MAT Pill
+  closestMatPill: document.querySelector("#closest-mat-pill"),
+  closestMatName: document.querySelector("#closest-mat-name"),
+  closestMatDist: document.querySelector("#closest-mat-dist"),
   // Floating Horloge
   floatingHorloge: document.querySelector("#floating-horloge"),
   btnHorlogeClose: document.querySelector("#btn-horloge-close"),
@@ -133,6 +138,12 @@ els.btnModeAdapted?.addEventListener("click", () => setHorlogeMode("adapted"));
 els.btnModeNormal?.addEventListener("click", () => setHorlogeMode("normal"));
 els.drawerModeBtn?.addEventListener("click", () => toggleHorlogeMode());
 els.drawerBeachBtn?.addEventListener("click", handleDrawerBeachClick);
+els.closestMatPill?.addEventListener("click", () => {
+  if (state.closestMatId) {
+    openDrawer(state.closestMatId, { focus: true });
+    toast(`📍 Navigation vers MAT ${state.closestMatId}`);
+  }
+});
 
 els.btnCalibrateCompass?.addEventListener("click", () => void calibrateBeachToCurrentHeading());
 els.btnBearingMinus?.addEventListener("click", () => setBeachBearing(state.beachBearing - 5));
@@ -517,6 +528,8 @@ function renderMarkers() {
     }
   }
 
+  updateAllMarkerDistances();
+
   if (bounds.length && !state._didFit) {
     setTimeout(() => {
       fitMap();
@@ -635,6 +648,13 @@ function matClockMarkerHtml(mat, devices, selected = false) {
   const ticks = [12, 3, 6, 9]
     .map((h) => `<i class="mat-clock-tick" style="--deg:${(h % 12) * 30}deg">${h === 12 ? "12" : h}</i>`)
     .join("");
+  let distStr = "";
+  if (state.gps.watching && state.gps.lat != null && state.gps.lng != null && mat.latitude != null && mat.longitude != null) {
+    const d = getDistanceMeters(state.gps.lat, state.gps.lng, mat.latitude, mat.longitude);
+    mat._distanceMeters = d;
+    distStr = formatDistance(d);
+  }
+
   return `<div class="mat-clock-marker${selected ? " is-selected" : ""}" title="MAT ${escapeHtml(mat.matId)}">
     <div class="mat-clock-ring ${isAdapted ? "is-adapted" : ""}" style="--ring-rot:${rot}deg">
       <span class="mat-clock-beach" title="Beach · 12">B</span>
@@ -642,7 +662,10 @@ function matClockMarkerHtml(mat, devices, selected = false) {
       ${nodes}
       <div class="mat-clock-hub" title="APs · Cameras">${escapeHtml(hub)}</div>
     </div>
-    <div class="mat-clock-caption">MAT ${escapeHtml(mat.matId)}</div>
+    <div class="mat-clock-caption">
+      <span class="mat-clock-caption-id">MAT ${escapeHtml(mat.matId)}</span>
+      <span class="mat-clock-dist" data-mat-dist="${escapeHtml(mat.matId)}" ${distStr ? "" : "hidden"}>${distStr ? `📍 ${distStr}` : ""}</span>
+    </div>
   </div>`;
 }
 
@@ -690,12 +713,15 @@ function openDrawer(matId, options = {}) {
   renderDrawer(mat);
   els.drawer.hidden = false;
   if (persist) writeViewCache();
+  updateDistanceLine();
+  updateDrawerDistance();
 }
 
 function closeDrawer() {
   state.selectedMatId = null;
   document.getElementById("app")?.classList.remove("has-drawer");
   els.drawer.hidden = true;
+  updateDistanceLine();
   renderMarkers();
   writeViewCache();
   setTimeout(() => {
@@ -1187,8 +1213,13 @@ function startGps(centerMap = true) {
         toast(`GPS connecté (±${Math.round(accuracy)}m)`);
       }
 
+      // Real-time distance update across map markers, drawer, line and search
+      updateAllMarkerDistances();
       if (state.selectedMatId) {
         updateDrawerDistance();
+      }
+      if (state.searchQuery && !els.searchDropdown?.hidden) {
+        handleSearchInput({ target: els.searchInput });
       }
     },
     (err) => {
@@ -1221,7 +1252,12 @@ function stopGps() {
     state.map.removeLayer(state.gps.circle);
     state.gps.circle = null;
   }
+  if (state.gps.distanceLine && state.map) {
+    state.map.removeLayer(state.gps.distanceLine);
+    state.gps.distanceLine = null;
+  }
   updateGpsUi();
+  updateAllMarkerDistances();
   if (state.selectedMatId) updateDrawerDistance();
 }
 
@@ -1284,6 +1320,101 @@ function updateDrawerDistance() {
     els.drawerDistance.hidden = false;
   } else {
     els.drawerDistance.hidden = true;
+  }
+}
+
+function updateAllMarkerDistances() {
+  const hasGps = state.gps.watching && state.gps.lat != null && state.gps.lng != null;
+  let closestMat = null;
+  let minDistance = Infinity;
+
+  for (const mat of state.mats) {
+    if (mat.latitude == null || mat.longitude == null) continue;
+    if (hasGps) {
+      const d = getDistanceMeters(state.gps.lat, state.gps.lng, mat.latitude, mat.longitude);
+      mat._distanceMeters = d;
+      if (d != null && d < minDistance) {
+        minDistance = d;
+        closestMat = mat;
+      }
+    } else {
+      mat._distanceMeters = null;
+    }
+  }
+
+  document.querySelectorAll("[data-mat-dist]").forEach((el) => {
+    const matId = el.dataset.matDist;
+    const mat = state.mats.find((m) => String(m.matId) === String(matId));
+    if (hasGps && mat && Number.isFinite(mat._distanceMeters)) {
+      el.hidden = false;
+      const isClosest = closestMat && String(closestMat.matId) === String(mat.matId);
+      el.textContent = `📍 ${formatDistance(mat._distanceMeters)}`;
+      el.classList.toggle("is-closest", Boolean(isClosest));
+    } else {
+      el.hidden = true;
+      el.textContent = "";
+      el.classList.remove("is-closest");
+    }
+  });
+
+  updateClosestMatPill(closestMat, minDistance);
+  updateDistanceLine();
+}
+
+function updateClosestMatPill(closestMat, minDistance) {
+  if (!els.closestMatPill) return;
+  if (!closestMat || !Number.isFinite(minDistance) || !state.gps.watching) {
+    els.closestMatPill.hidden = true;
+    state.closestMatId = null;
+    return;
+  }
+  state.closestMatId = closestMat.matId;
+  if (els.closestMatName) els.closestMatName.textContent = `MAT ${closestMat.matId}`;
+  if (els.closestMatDist) els.closestMatDist.textContent = `📍 ${formatDistance(minDistance)}`;
+  els.closestMatPill.hidden = false;
+}
+
+function updateDistanceLine() {
+  if (!state.map) return;
+  const hasGps = state.gps.watching && state.gps.lat != null && state.gps.lng != null;
+  if (!hasGps || !state.selectedMatId) {
+    if (state.gps.distanceLine) {
+      state.map.removeLayer(state.gps.distanceLine);
+      state.gps.distanceLine = null;
+    }
+    return;
+  }
+  const mat = state.mats.find((m) => String(m.matId) === String(state.selectedMatId));
+  if (!mat || mat.latitude == null || mat.longitude == null) {
+    if (state.gps.distanceLine) {
+      state.map.removeLayer(state.gps.distanceLine);
+      state.gps.distanceLine = null;
+    }
+    return;
+  }
+
+  const from = [state.gps.lat, state.gps.lng];
+  const to = [mat.latitude, mat.longitude];
+  const d = getDistanceMeters(state.gps.lat, state.gps.lng, mat.latitude, mat.longitude);
+  const tooltipText = `📍 ${formatDistance(d)}`;
+
+  if (!state.gps.distanceLine) {
+    state.gps.distanceLine = L.polyline([from, to], {
+      color: "#38bdf8",
+      weight: 3,
+      dashArray: "6, 8",
+      opacity: 0.9,
+      interactive: false,
+    }).addTo(state.map);
+
+    state.gps.distanceLine.bindTooltip(tooltipText, {
+      permanent: true,
+      direction: "center",
+      className: "distance-line-tooltip",
+    });
+  } else {
+    state.gps.distanceLine.setLatLngs([from, to]);
+    state.gps.distanceLine.setTooltipContent(tooltipText);
   }
 }
 

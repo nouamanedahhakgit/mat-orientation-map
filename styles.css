@@ -647,17 +647,121 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); 
   outline-offset: 1px;
 }
 .mat-clock-caption {
-  max-width: 96px;
-  padding: 1px 5px;
+  max-width: 110px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.mat-clock-caption-id {
+  padding: 1px 6px;
   border-radius: 6px;
   font-size: 9px;
   font-weight: 700;
   color: #d7e8f2;
-  background: rgba(8, 20, 30, 0.75);
+  background: rgba(8, 20, 30, 0.85);
   text-align: center;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+.mat-clock-dist {
+  display: inline-block;
+  font-size: 7.5px;
+  font-weight: 800;
+  color: #38bdf8;
+  background: rgba(6, 22, 34, 0.95);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  border-radius: 999px;
+  padding: 1px 5px;
+  white-space: nowrap;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45);
+  transition: all 0.2s ease;
+}
+.mat-clock-dist.is-closest {
+  background: #0284c7;
+  color: #ffffff;
+  border-color: #7dd3fc;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.85);
+  font-weight: 900;
+  animation: dist-glow 1.8s infinite ease-in-out;
+}
+@keyframes dist-glow {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 6px rgba(56, 189, 248, 0.6); }
+  50% { transform: scale(1.06); box-shadow: 0 0 12px rgba(56, 189, 248, 0.95); }
+}
+.mat-clock-dist[hidden] {
+  display: none !important;
+}
+
+/* Real-Time Closest MAT Floating Pill */
+.closest-mat-pill {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 950;
+  background: rgba(8, 22, 36, 0.94);
+  border: 1.5px solid #38bdf8;
+  border-radius: 999px;
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #e0f2fe;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.6), 0 0 14px rgba(56, 189, 248, 0.4);
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  animation: pill-appear 0.3s cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+@keyframes pill-appear {
+  from { opacity: 0; transform: translate(-50%, 12px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.closest-mat-pill:hover {
+  background: rgba(14, 38, 62, 0.98);
+  box-shadow: 0 4px 22px rgba(0, 0, 0, 0.7), 0 0 20px rgba(56, 189, 248, 0.7);
+  transform: translateX(-50%) scale(1.04);
+}
+.closest-mat-pill .pill-badge {
+  background: #0284c7;
+  color: #ffffff;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+.closest-mat-pill .pill-name {
+  color: #ffffff;
+  font-weight: 800;
+}
+.closest-mat-pill .pill-dist {
+  color: #38bdf8;
+  font-weight: 800;
+}
+.closest-mat-pill[hidden],
+.has-drawer .closest-mat-pill {
+  display: none !important;
+}
+
+/* Guidance Line Leaflet Tooltip */
+.distance-line-tooltip {
+  background: rgba(6, 20, 32, 0.92) !important;
+  border: 1px solid #38bdf8 !important;
+  color: #38bdf8 !important;
+  font-size: 10px !important;
+  font-weight: 800 !important;
+  padding: 2px 8px !important;
+  border-radius: 999px !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6) !important;
+  pointer-events: none !important;
+}
+.distance-line-tooltip::before {
+  display: none !important;
 }
 
 .toast {

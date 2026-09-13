@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>MAT Orientation Map</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="./styles.css?v=14" />
+  <link rel="stylesheet" href="./styles.css?v=15" />
 </head>
 <body>
   <div id="login-screen" class="login-screen">
     <form id="login-form" class="login-card" autocomplete="on">
-      <strong>MAT · TCE</strong>
+      <strong>MAT · TCE & TC3</strong>
       <p>Sign in with your Excel <b>profiles</b> user</p>
       <label>
         User
@@ -28,10 +28,8 @@
   <div id="app" hidden>
     <header class="topbar">
       <div class="topbar-row">
-        <div class="topbar-text">
-          <strong>MAT · TCE</strong>
-          <span id="sync-status" class="sync-status">…</span>
-        </div>
+        <h1 class="topbar-title">MAT</h1>
+        <span id="sync-status" class="sync-status">Connecting…</span>
         <span id="zoom-level" class="zoom-level" title="Map zoom">z—</span>
         <span id="auth-user" class="auth-user" title="Signed in"></span>
         <div class="topbar-actions">
@@ -49,7 +47,7 @@
             type="search"
             id="mat-search-input"
             class="search-input"
-            placeholder="Rechercher MAT, AP, Caméra (ex: 54, AP1, DTC128)..."
+            placeholder="Rechercher MAT, AP, Caméra (ex: TC3, 54, AP1, DTC128)..."
             autocomplete="off"
             spellcheck="false"
             aria-label="Rechercher un équipement"
@@ -176,6 +174,6 @@
   </div>
   <div id="toast" class="toast" hidden></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="./app.js?v=14" defer></script>
+  <script src="./app.js?v=15" defer></script>
 </body>
 </html>

@@ -29,9 +29,6 @@ function getBearingCompassText(deg) {
   return `${normalized}° ${directions[index]}`;
 }
 
-/** Public map matches local #network-map default: TCE only (no TC3). */
-const TERMINAL_FILTER = "TCE";
-
 const state = {
   map: null,
   layer: null,
@@ -326,7 +323,7 @@ async function loadSheet(showBusy = false) {
   try {
     const payload = await postSheet({ mode: "export" });
     if (!payload.ok) throw new Error(payload.error || payload.hint || "Export failed");
-    const mats = parseSheetValues(payload.values || []).filter(isPublicTerminalMat);
+    const mats = parseSheetValues(payload.values || []);
     state.mats = mats;
     state.lastUpdatedAt = payload.updatedAt || new Date().toISOString();
     renderMarkers();
@@ -463,17 +460,6 @@ function parseCoord(value) {
   // Empty Excel cells must not become 0,0 (Gulf of Guinea).
   if (n === 0) return null;
   return n;
-}
-
-function isPublicTerminalMat(mat) {
-  const term = String(mat?.terminal || "").trim().toUpperCase();
-  if (term === TERMINAL_FILTER) return true;
-  // Rows with APs named TCE-… but blank Terminal still belong on the TCE map.
-  if (!term) {
-    const names = [...(mat.aps || []), ...(mat.cameras || [])].map((d) => String(d.name || ""));
-    if (names.some((n) => /^TCE-/i.test(n))) return true;
-  }
-  return false;
 }
 
 function parseClock(value) {
@@ -655,7 +641,9 @@ function matClockMarkerHtml(mat, devices, selected = false) {
     distStr = formatDistance(d);
   }
 
-  return `<div class="mat-clock-marker${selected ? " is-selected" : ""}" title="MAT ${escapeHtml(mat.matId)}">
+  const termBadge = mat.terminal ? `<span class="mat-caption-term">${escapeHtml(mat.terminal)}</span>` : "";
+
+  return `<div class="mat-clock-marker${selected ? " is-selected" : ""}" title="${mat.terminal ? `[${escapeHtml(mat.terminal)}] ` : ""}MAT ${escapeHtml(mat.matId)}">
     <div class="mat-clock-ring ${isAdapted ? "is-adapted" : ""}" style="--ring-rot:${rot}deg">
       <span class="mat-clock-beach" title="Beach · 12">B</span>
       ${ticks}
@@ -663,7 +651,7 @@ function matClockMarkerHtml(mat, devices, selected = false) {
       <div class="mat-clock-hub" title="APs · Cameras">${escapeHtml(hub)}</div>
     </div>
     <div class="mat-clock-caption">
-      <span class="mat-clock-caption-id">MAT ${escapeHtml(mat.matId)}</span>
+      <span class="mat-clock-caption-id">${termBadge}MAT ${escapeHtml(mat.matId)}</span>
       <span class="mat-clock-dist" data-mat-dist="${escapeHtml(mat.matId)}" ${distStr ? "" : "hidden"}>${distStr ? `📍 ${distStr}` : ""}</span>
     </div>
   </div>`;
@@ -787,9 +775,12 @@ function panMap(direction) {
 }
 
 function renderDrawer(mat) {
-  els.drawerTitle.textContent = `MAT ${mat.matId}`;
+  const termBadge = mat.terminal ? ` <span class="drawer-term-badge">${escapeHtml(mat.terminal)}</span>` : "";
+  els.drawerTitle.innerHTML = `MAT ${escapeHtml(mat.matId)}${termBadge}`;
   if (els.drawerMeta) {
     const bits = [];
+    if (mat.terminal) bits.push(mat.terminal);
+    if (mat.latitude == null || mat.longitude == null) bits.push("⚠️ Non cartographié");
     if (mat.aps.length) bits.push(`${mat.aps.length} AP`);
     if (mat.cameras.length) bits.push(`${mat.cameras.length} cam`);
     const last = (mat.history || [])[mat.history.length - 1];
@@ -939,7 +930,7 @@ function renderClockCard(kind, key, subtitle, clock, estimated, matId) {
 async function saveOrientation({ matId, kind, key, clock }) {
   const pendingKey = `${matId}:${kind}:${key}`;
   state.pending[pendingKey] = true;
-  const mat = state.mats.find((item) => item.matId === matId);
+  const mat = state.mats.find((item) => String(item.matId) === String(matId));
   if (mat) {
     const list = kind === "ap" ? mat.aps : mat.cameras;
     const item = list.find((row) => (row.unit || row.name) === key || row.name === key);
@@ -957,7 +948,7 @@ async function saveOrientation({ matId, kind, key, clock }) {
     if (!payload.ok) throw new Error(payload.error || "Patch failed");
     if (mat && Array.isArray(payload.history)) {
       mat.history = payload.history;
-      if (state.selectedMatId === matId) renderDrawer(mat);
+      if (String(state.selectedMatId) === String(matId)) renderDrawer(mat);
     }
     toast(clock == null ? `${key} effacé` : `${key} → ${clock}h`);
     setStatus(`Enregistré · ${formatTime(new Date().toISOString())}`, "ok");
@@ -971,8 +962,8 @@ async function saveOrientation({ matId, kind, key, clock }) {
     await loadSheet(false);
   } finally {
     delete state.pending[pendingKey];
-    const again = state.mats.find((item) => item.matId === matId);
-    if (again && state.selectedMatId === matId) renderDrawer(again);
+    const again = state.mats.find((item) => String(item.matId) === String(matId));
+    if (again && String(state.selectedMatId) === String(matId)) renderDrawer(again);
   }
 }
 
@@ -992,22 +983,46 @@ function handleSearchInput(event) {
 
   for (const mat of state.mats) {
     const matIdStr = String(mat.matId).toLowerCase();
+    const termStr = String(mat.terminal || "").toLowerCase();
+    const fullMat1 = `${termStr ? `${termStr}-` : ""}mat${matIdStr}`;
+    const fullMat2 = `${termStr ? `${termStr} ` : ""}mat ${matIdStr}`;
+    const fullMat3 = `${termStr ? `${termStr}` : ""}${matIdStr}`;
     let matched = false;
     let matchKind = "mat";
     let matchDetail = "";
 
-    // 1. Direct MAT ID match
-    if (matIdStr === queryNormalized || matIdStr === query || matIdStr.includes(queryNormalized)) {
+    // 1. Terminal search (e.g. typing "tc3" or "tce")
+    if (termStr && (query === termStr || query === "tc3" && termStr === "tc3" || query === "tce" && termStr === "tce")) {
       matched = true;
       matchKind = "mat";
+      matchDetail = `Terminal ${mat.terminal}`;
     }
 
-    // 2. AP Name match
+    // 2. Direct MAT ID match (e.g. "1", "mat 1", "tc3-mat1", "tce-mat49")
+    if (!matched) {
+      if (
+        matIdStr === queryNormalized ||
+        matIdStr === query ||
+        matIdStr.includes(queryNormalized) ||
+        fullMat1.includes(query) ||
+        fullMat2.includes(query) ||
+        fullMat3 === query
+      ) {
+        matched = true;
+        matchKind = "mat";
+      }
+    }
+
+    // 3. AP Name match (e.g. "tc3-mat1-ap1", "ap1", "tce-mat49-ap1")
     if (!matched) {
       for (const ap of mat.aps) {
         const apName = String(ap.name || "").toLowerCase();
         const apUnit = String(ap.unit || "").toLowerCase();
-        if (apName.includes(query) || apUnit.includes(query) || (queryNormalized && apName.includes(queryNormalized))) {
+        if (
+          apName.includes(query) ||
+          apUnit.includes(query) ||
+          (queryNormalized && apName.includes(queryNormalized))
+        ) {
           matched = true;
           matchKind = "ap";
           matchDetail = ap.name || ap.unit;
@@ -1016,11 +1031,14 @@ function handleSearchInput(event) {
       }
     }
 
-    // 3. Camera Name match
+    // 4. Camera Name match (e.g. "mtc27", "dtc128", "cam1")
     if (!matched) {
       for (const cam of mat.cameras) {
         const camName = String(cam.name || "").toLowerCase();
-        if (camName.includes(query) || (queryNormalized && camName.includes(queryNormalized))) {
+        if (
+          camName.includes(query) ||
+          (queryNormalized && camName.includes(queryNormalized))
+        ) {
           matched = true;
           matchKind = "cam";
           matchDetail = cam.name;
@@ -1038,17 +1056,23 @@ function handleSearchInput(event) {
     }
   }
 
-  // Sorting: exact MAT match first, then by distance, then numerical order
+  // Sorting:
+  // - exact match first
+  // - then items with distance (closest first)
+  // - then items without distance
+  // - alphanumeric order
   results.sort((a, b) => {
-    const aExact = String(a.mat.matId) === queryNormalized;
-    const bExact = String(b.mat.matId) === queryNormalized;
+    const aExact = String(a.mat.matId) === queryNormalized || String(a.matchDetail).toLowerCase() === query;
+    const bExact = String(b.mat.matId) === queryNormalized || String(b.matchDetail).toLowerCase() === query;
     if (aExact && !bExact) return -1;
     if (!aExact && bExact) return 1;
     if (a.dist != null && b.dist != null) return a.dist - b.dist;
-    return Number(a.mat.matId) - Number(b.mat.matId);
+    if (a.dist != null && b.dist == null) return -1;
+    if (a.dist == null && b.dist != null) return 1;
+    return String(a.mat.matId).localeCompare(String(b.mat.matId), undefined, { numeric: true });
   });
 
-  state.searchResults = results.slice(0, 15);
+  state.searchResults = results.slice(0, 30);
   state.searchSelectedIndex = -1;
   renderSearchDropdown();
 }
@@ -1113,11 +1137,17 @@ function renderSearchDropdown() {
       title = `${matchDetail} (MAT ${mat.matId})`;
     }
 
-    const distTag = dist != null ? `<span class="search-dist-tag">📍 ${formatDistance(dist)}</span>` : "";
+    const termTag = mat.terminal
+      ? `<span class="search-term-tag ${mat.terminal.toLowerCase()}">${escapeHtml(mat.terminal)}</span>`
+      : "";
+    const distTag = dist != null
+      ? `<span class="search-dist-tag">📍 ${formatDistance(dist)}</span>`
+      : (mat.latitude == null || mat.longitude == null ? `<span class="search-unmapped-tag">Non-carto</span>` : "");
 
     return `<div class="search-item ${idx === state.searchSelectedIndex ? "is-selected" : ""}" data-index="${idx}" data-mat-id="${mat.matId}" data-target-name="${escapeHtml(matchDetail)}">
       <div class="search-item-left">
         <span class="search-badge ${badgeClass}">${badgeText}</span>
+        ${termTag}
         <span class="search-item-title">${escapeHtml(title)}</span>
       </div>
       <div class="search-item-right">
@@ -1145,6 +1175,10 @@ function selectSearchResult(matId, targetName = "") {
   if (!mat) return;
 
   openDrawer(mat.matId, { focus: true });
+
+  if (mat.latitude == null || mat.longitude == null) {
+    toast(`MAT ${mat.matId}${mat.terminal ? ` (${mat.terminal})` : ""} ouvert (non cartographié)`);
+  }
 
   if (targetName) {
     setTimeout(() => {

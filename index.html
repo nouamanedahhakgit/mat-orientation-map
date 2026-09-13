@@ -27,19 +27,108 @@
 
   <div id="app" hidden>
     <header class="topbar">
-      <div class="topbar-text">
-        <strong>MAT · TCE</strong>
-        <span id="sync-status" class="sync-status">…</span>
+      <div class="topbar-row">
+        <div class="topbar-text">
+          <strong>MAT · TCE</strong>
+          <span id="sync-status" class="sync-status">…</span>
+        </div>
+        <span id="zoom-level" class="zoom-level" title="Map zoom">z—</span>
+        <span id="auth-user" class="auth-user" title="Signed in"></span>
+        <div class="topbar-actions">
+          <button type="button" id="btn-gps-toggle" class="ghost topbar-btn" title="Activer / Localiser GPS">📍 GPS</button>
+          <button type="button" id="btn-horloge-toggle" class="ghost topbar-btn" title="Afficher l'Horloge / Boussole">🧭 Horloge</button>
+          <button type="button" id="btn-fit" class="ghost" title="Fit">Fit</button>
+          <button type="button" id="btn-refresh" class="ghost" title="Refresh">↻</button>
+          <button type="button" id="btn-logout" class="ghost" title="Sign out">Out</button>
+        </div>
       </div>
-      <span id="zoom-level" class="zoom-level" title="Map zoom">z—</span>
-      <span id="auth-user" class="auth-user" title="Signed in"></span>
-      <div class="topbar-actions">
-        <button type="button" id="btn-refresh" class="ghost" title="Refresh">↻</button>
-        <button type="button" id="btn-fit" class="ghost" title="Fit">Fit</button>
-        <button type="button" id="btn-logout" class="ghost" title="Sign out">Out</button>
+      <div class="search-container">
+        <div class="search-input-wrap">
+          <span class="search-icon" aria-hidden="true">🔍</span>
+          <input
+            type="search"
+            id="mat-search-input"
+            class="search-input"
+            placeholder="Rechercher MAT, AP, Caméra (ex: 54, AP1, DTC128)..."
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="Rechercher un équipement"
+          />
+          <button type="button" id="btn-search-clear" class="search-clear-btn" hidden title="Effacer la recherche">✕</button>
+        </div>
+        <div id="search-dropdown" class="search-dropdown" hidden></div>
       </div>
     </header>
     <main id="map" aria-label="MAT orientation map"></main>
+
+    <!-- Floating Horloge Widget (Plage = 12h) -->
+    <div id="floating-horloge" class="floating-horloge" hidden>
+      <div class="horloge-panel-card">
+        <div class="horloge-panel-header">
+          <div class="horloge-title-wrap">
+            <span class="horloge-icon">🧭</span>
+            <strong>Horloge · Plage (12h)</strong>
+          </div>
+          <button type="button" id="btn-horloge-close" class="ghost icon-btn" title="Fermer">✕</button>
+        </div>
+
+        <!-- Mode Toggle: Adapté (Boussole) vs Normal (Fixe) -->
+        <div class="horloge-mode-selector">
+          <button type="button" id="btn-mode-adapted" class="mode-tab is-active" title="La boussole fait tourner le cadran vers la plage">
+            🏖️ Adapté (Boussole)
+          </button>
+          <button type="button" id="btn-mode-normal" class="mode-tab" title="Cadran fixe (12h en haut)">
+            ⏱️ Normal (Fixe)
+          </button>
+        </div>
+
+        <div class="horloge-dial-wrap">
+          <div class="horloge-reticle" title="Direction où pointe le téléphone">
+            <span class="reticle-arrow">▼</span>
+            <span class="reticle-label">VISEUR</span>
+          </div>
+
+          <div id="horloge-rotating-dial" class="horloge-rotating-dial">
+            <div class="dial-beach-mark" title="Direction de la Plage (12h)">
+              <span class="beach-icon">🏖️</span>
+              <span class="beach-text">12 · PLAGE</span>
+            </div>
+            <span class="dial-hour h1" style="--deg:30deg">1</span>
+            <span class="dial-hour h2" style="--deg:60deg">2</span>
+            <span class="dial-hour h3" style="--deg:90deg">3</span>
+            <span class="dial-hour h4" style="--deg:120deg">4</span>
+            <span class="dial-hour h5" style="--deg:150deg">5</span>
+            <span class="dial-hour h6" style="--deg:180deg">6</span>
+            <span class="dial-hour h7" style="--deg:210deg">7</span>
+            <span class="dial-hour h8" style="--deg:240deg">8</span>
+            <span class="dial-hour h9" style="--deg:270deg">9</span>
+            <span class="dial-hour h10" style="--deg:300deg">10</span>
+            <span class="dial-hour h11" style="--deg:330deg">11</span>
+            <div class="dial-center-cap"></div>
+          </div>
+        </div>
+
+        <div class="horloge-telemetry">
+          <div class="telemetry-item aim-highlight">
+            <small>Direction visée</small>
+            <strong id="horloge-aim-value">12h (Plage)</strong>
+          </div>
+          <div class="telemetry-item">
+            <small>Cap Compas</small>
+            <strong id="horloge-heading-value">—</strong>
+          </div>
+          <div class="telemetry-item">
+            <small>Réf. Plage</small>
+            <strong>58° NE</strong>
+          </div>
+        </div>
+
+        <div class="horloge-footer-hint" id="horloge-footer-hint">
+          Pointez le téléphone vers l'équipement : le viseur indique l'heure exacte.
+        </div>
+      </div>
+    </div>
+
     <div class="map-nav-pad" id="map-nav-pad" aria-label="Pan map">
       <button type="button" class="map-nav-btn map-nav-up" data-pan="up" title="Up" aria-label="Pan up">▲</button>
       <button type="button" class="map-nav-btn map-nav-left" data-pan="left" title="Left" aria-label="Pan left">◀</button>
@@ -50,8 +139,8 @@
       <div class="drawer-bar" id="gps-assist">
         <h2 id="drawer-title">MAT</h2>
         <span id="drawer-meta" class="drawer-meta" hidden></span>
-        <span id="gps-assist-text" class="gps-chip" hidden></span>
-        <button type="button" id="gps-assist-btn" class="ghost gps-btn">GPS</button>
+        <span id="drawer-distance" class="drawer-distance" hidden>📍 —</span>
+        <button type="button" id="drawer-mode-btn" class="ghost mode-btn" title="Basculer Mode Horloge (Adapté / Fixe)">🏖️ Adapté</button>
         <button type="button" id="drawer-close" class="ghost icon-btn" aria-label="Close">✕</button>
       </div>
       <div id="drawer-body" class="drawer-body"></div>
@@ -59,6 +148,6 @@
   </div>
   <div id="toast" class="toast" hidden></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="./app.js?v=9" defer></script>
+  <script src="./app.js?v=10" defer></script>
 </body>
 </html>

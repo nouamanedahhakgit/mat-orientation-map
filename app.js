@@ -5,6 +5,8 @@ const POLL_MS = 8000;
 const API_PATH = "/api/sheet";
 const VIEW_CACHE_KEY = "mat-orientation-map-view-v1";
 const AUTH_CACHE_KEY = "mat-orientation-map-auth-v1";
+/** Yard Beach bearing reference (Casablanca Port: 58° NE). Beach strictly = 12h */
+const BEACH_BEARING = 58;
 /** Public map matches local #network-map default: TCE only (no TC3). */
 const TERMINAL_FILTER = "TCE";
 
@@ -21,6 +23,22 @@ const state = {
   _mapReady: false,
   auth: readAuthCache(),
   pending: Object.create(null),
+  horlogeMode: "adapted", // "adapted" (rotates with compass towards beach) | "normal" (fixed 12h en haut)
+  horlogeOpen: false,
+  searchQuery: "",
+  searchResults: [],
+  searchSelectedIndex: -1,
+  gps: {
+    watching: false,
+    watchId: null,
+    lat: null,
+    lng: null,
+    accuracy: null,
+    heading: null,
+    marker: null,
+    circle: null,
+    error: null,
+  },
   compass: {
     watching: false,
     heading: null,
@@ -44,15 +62,31 @@ const els = {
   refresh: document.querySelector("#btn-refresh"),
   fit: document.querySelector("#btn-fit"),
   logout: document.querySelector("#btn-logout"),
+  // Topbar actions
+  btnGpsToggle: document.querySelector("#btn-gps-toggle"),
+  btnHorlogeToggle: document.querySelector("#btn-horloge-toggle"),
+  // Search
+  searchInput: document.querySelector("#mat-search-input"),
+  searchClear: document.querySelector("#btn-search-clear"),
+  searchDropdown: document.querySelector("#search-dropdown"),
+  // Floating Horloge
+  floatingHorloge: document.querySelector("#floating-horloge"),
+  btnHorlogeClose: document.querySelector("#btn-horloge-close"),
+  btnModeAdapted: document.querySelector("#btn-mode-adapted"),
+  btnModeNormal: document.querySelector("#btn-mode-normal"),
+  horlogeRotatingDial: document.querySelector("#horloge-rotating-dial"),
+  horlogeAimValue: document.querySelector("#horloge-aim-value"),
+  horlogeHeadingValue: document.querySelector("#horloge-heading-value"),
+  horlogeFooterHint: document.querySelector("#horloge-footer-hint"),
+  // Drawer
   drawer: document.querySelector("#drawer"),
   drawerTitle: document.querySelector("#drawer-title"),
   drawerMeta: document.querySelector("#drawer-meta"),
+  drawerDistance: document.querySelector("#drawer-distance"),
+  drawerModeBtn: document.querySelector("#drawer-mode-btn"),
   drawerBody: document.querySelector("#drawer-body"),
   drawerClose: document.querySelector("#drawer-close"),
   toast: document.querySelector("#toast"),
-  gpsAssist: document.querySelector("#gps-assist"),
-  gpsAssistText: document.querySelector("#gps-assist-text"),
-  gpsAssistBtn: document.querySelector("#gps-assist-btn"),
   navPad: document.querySelector("#map-nav-pad"),
 };
 
@@ -60,7 +94,22 @@ els.refresh?.addEventListener("click", () => loadSheet(true));
 els.fit?.addEventListener("click", fitMap);
 els.logout?.addEventListener("click", logout);
 els.drawerClose?.addEventListener("click", closeDrawer);
-els.gpsAssistBtn?.addEventListener("click", toggleCompassAssist);
+els.btnGpsToggle?.addEventListener("click", () => toggleGps());
+els.btnHorlogeToggle?.addEventListener("click", () => toggleHorlogeWidget());
+els.btnHorlogeClose?.addEventListener("click", () => toggleHorlogeWidget(false));
+els.btnModeAdapted?.addEventListener("click", () => setHorlogeMode("adapted"));
+els.btnModeNormal?.addEventListener("click", () => setHorlogeMode("normal"));
+els.drawerModeBtn?.addEventListener("click", () => toggleHorlogeMode());
+
+// Search Listeners
+els.searchInput?.addEventListener("input", handleSearchInput);
+els.searchInput?.addEventListener("focus", handleSearchInput);
+els.searchInput?.addEventListener("keydown", handleSearchKeydown);
+els.searchClear?.addEventListener("click", clearSearch);
+document.addEventListener("click", (e) => {
+  if (!e.target.closest?.(".search-container")) closeSearchDropdown();
+});
+
 els.navPad?.addEventListener("click", (event) => {
   const button = event.target.closest?.("[data-pan]");
   if (!button) return;
@@ -622,19 +671,27 @@ function renderDrawer(mat) {
     els.drawerMeta.textContent = bits.join(" · ");
     els.drawerMeta.hidden = bits.length === 0;
   }
-  updateGpsAssistUi();
+  updateDrawerDistance();
+  if (els.drawerModeBtn) {
+    els.drawerModeBtn.textContent = state.horlogeMode === "adapted" ? "🏖️ Adapté" : "⏱️ Normal";
+    els.drawerModeBtn.title = state.horlogeMode === "adapted"
+      ? "Mode Adapté actif : 12h pointe vers la plage physique. Cliquer pour passer en Mode Normal."
+      : "Mode Normal actif : cadran fixe. Cliquer pour activer la boussole adaptée à la plage.";
+  }
 
-  const estimated = state.compass.estimatedClock;
+  const isAdapted = state.horlogeMode === "adapted";
+  const estimated = isAdapted ? state.compass.estimatedClock : null;
   const cards = [];
+
   for (const ap of mat.aps) {
     const key = ap.unit || ap.name;
-    cards.push(`<div class="ori-clock-wrap">
+    cards.push(`<div class="ori-clock-wrap" data-device-card="${escapeHtml(key)}">
       <span class="ori-kind">AP</span>
       ${renderClockCard("ap", key, ap.name || key, ap.clock, estimated, mat.matId)}
     </div>`);
   }
   for (const cam of mat.cameras) {
-    cards.push(`<div class="ori-clock-wrap">
+    cards.push(`<div class="ori-clock-wrap" data-device-card="${escapeHtml(cam.name)}">
       <span class="ori-kind cam">CAM</span>
       ${renderClockCard("camera", cam.name, "Camera", cam.clock, estimated, mat.matId)}
     </div>`);
@@ -642,7 +699,7 @@ function renderDrawer(mat) {
   cards.push(renderHistoryBlock(mat.history || []));
   els.drawerBody.innerHTML = cards.length
     ? cards.join("")
-    : `<div class="sync-status">No APs or cameras on this MAT row</div>`;
+    : `<div class="sync-status">Aucun AP ou caméra sur cette ligne MAT</div>`;
 
   els.drawerBody.querySelectorAll("[data-clock-hour]").forEach((button) => {
     button.addEventListener("click", (event) => {
@@ -685,13 +742,13 @@ function renderDrawer(mat) {
 function renderHistoryBlock(history) {
   const items = [...(history || [])].slice(-15).reverse();
   if (!items.length) {
-    return `<div class="history-block"><div class="history-title">Edits</div><p class="history-empty">No edits yet</p></div>`;
+    return `<div class="history-block"><div class="history-title">Historique</div><p class="history-empty">Aucune modification</p></div>`;
   }
   const rows = items.map((entry) => {
     const text = entry.detail ? escapeHtml(entry.detail) : formatHistoryEntry(entry);
     return `<li>${text}</li>`;
   }).join("");
-  return `<div class="history-block"><div class="history-title">Edits</div><ul class="history-list">${rows}</ul></div>`;
+  return `<div class="history-block"><div class="history-title">Historique</div><ul class="history-list">${rows}</ul></div>`;
 }
 
 function formatHistoryEntry(entry) {
@@ -700,12 +757,12 @@ function formatHistoryEntry(entry) {
   const key = entry.key || "?";
   const when = entry.at ? formatTime(entry.at) : "";
   if (entry.action === "clear") {
-    return `${user}cleared ${kind} ${key}${entry.from != null ? ` (was ${entry.from})` : ""}${when ? ` · ${when}` : ""}`;
+    return `${user}effacé ${kind} ${key}${entry.from != null ? ` (était ${entry.from})` : ""}${when ? ` · ${when}` : ""}`;
   }
   if (entry.action === "change") {
-    return `${user}changed ${kind} ${key} ${entry.from ?? "—"} → ${entry.to}${when ? ` · ${when}` : ""}`;
+    return `${user}modifié ${kind} ${key} ${entry.from ?? "—"} → ${entry.to}${when ? ` · ${when}` : ""}`;
   }
-  return `${user}set ${kind} ${key} → ${entry.to}${when ? ` · ${when}` : ""}`;
+  return `${user}défini ${kind} ${key} → ${entry.to}${when ? ` · ${when}` : ""}`;
 }
 
 function renderClockCard(kind, key, subtitle, clock, estimated, matId) {
@@ -724,7 +781,7 @@ function renderClockCard(kind, key, subtitle, clock, estimated, matId) {
           <div class="clock-value">${clock != null ? clock : "—"}</div>
         </div>
       </div>
-      <div class="clock-face" aria-label="Clock orientation for ${escapeHtml(key)}">
+      <div class="clock-face" aria-label="Cadran pour ${escapeHtml(key)}">
         <span class="clock-beach">Beach · 12</span>
         ${hours.map((hour) => {
           const angle = (hour % 12) * 30;
@@ -738,9 +795,9 @@ function renderClockCard(kind, key, subtitle, clock, estimated, matId) {
         }).join("")}
         <span class="clock-center"></span>
       </div>
-      <div class="clock-save-status" ${pending ? "" : "hidden"}>${pending ? "Saving…" : ""}</div>
+      <div class="clock-save-status" ${pending ? "" : "hidden"}>${pending ? "Enregistrement…" : ""}</div>
       ${estimated != null
-        ? `<button type="button" class="secondary-button clock-apply" data-apply-estimate data-kind="${escapeHtml(kind)}" data-key="${escapeHtml(key)}" data-mat-id="${escapeHtml(matId)}" ${pending ? "disabled" : ""}>Use compass → ${estimated}</button>`
+        ? `<button type="button" class="secondary-button clock-apply" data-apply-estimate data-kind="${escapeHtml(kind)}" data-key="${escapeHtml(key)}" data-mat-id="${escapeHtml(matId)}" ${pending ? "disabled" : ""}>🎯 Viseur boussole → ${estimated}h</button>`
         : ""}
     </article>`;
 }
@@ -768,15 +825,15 @@ async function saveOrientation({ matId, kind, key, clock }) {
       mat.history = payload.history;
       if (state.selectedMatId === matId) renderDrawer(mat);
     }
-    toast(clock == null ? `${key} cleared` : `${key} → ${clock}`);
-    setStatus(`Saved · ${formatTime(new Date().toISOString())}`, "ok");
+    toast(clock == null ? `${key} effacé` : `${key} → ${clock}h`);
+    setStatus(`Enregistré · ${formatTime(new Date().toISOString())}`, "ok");
   } catch (error) {
     if (/login|session|password|unauthorized/i.test(String(error.message || ""))) {
       logout();
       return;
     }
-    toast(error.message || "Save failed");
-    setStatus(error.message || "Save failed", "err");
+    toast(error.message || "Échec de sauvegarde");
+    setStatus(error.message || "Échec de sauvegarde", "err");
     await loadSheet(false);
   } finally {
     delete state.pending[pendingKey];
@@ -785,144 +842,511 @@ async function saveOrientation({ matId, kind, key, clock }) {
   }
 }
 
-function updateGpsAssistUi() {
-  if (!els.gpsAssist || !els.gpsAssistBtn) return;
-  const { watching, estimatedClock, error } = state.compass;
-  els.gpsAssist.classList.toggle("is-active", watching);
-  els.gpsAssist.classList.toggle("is-ready", estimatedClock != null);
-  els.gpsAssistBtn.textContent = watching ? "Stop" : "GPS";
-  if (!els.gpsAssistText) return;
-  if (error) {
-    els.gpsAssistText.hidden = false;
-    els.gpsAssistText.textContent = "Denied";
-  } else if (watching && estimatedClock != null) {
-    els.gpsAssistText.hidden = false;
-    els.gpsAssistText.textContent = `→ ${estimatedClock}`;
-  } else if (watching) {
-    els.gpsAssistText.hidden = false;
-    els.gpsAssistText.textContent = "On";
+/* -------------------------------------------------------------
+   SEARCH & FILTER
+------------------------------------------------------------- */
+function handleSearchInput(event) {
+  const query = String(event.target.value || "").trim().toLowerCase();
+  state.searchQuery = query;
+  if (els.searchClear) els.searchClear.hidden = !query;
+  if (!query) {
+    closeSearchDropdown();
+    return;
+  }
+  const results = [];
+  const queryNormalized = query.replace(/^mat\s*/i, "").trim();
+
+  for (const mat of state.mats) {
+    const matIdStr = String(mat.matId).toLowerCase();
+    let matched = false;
+    let matchKind = "mat";
+    let matchDetail = "";
+
+    // 1. Direct MAT ID match
+    if (matIdStr === queryNormalized || matIdStr === query || matIdStr.includes(queryNormalized)) {
+      matched = true;
+      matchKind = "mat";
+    }
+
+    // 2. AP Name match
+    if (!matched) {
+      for (const ap of mat.aps) {
+        const apName = String(ap.name || "").toLowerCase();
+        const apUnit = String(ap.unit || "").toLowerCase();
+        if (apName.includes(query) || apUnit.includes(query) || (queryNormalized && apName.includes(queryNormalized))) {
+          matched = true;
+          matchKind = "ap";
+          matchDetail = ap.name || ap.unit;
+          break;
+        }
+      }
+    }
+
+    // 3. Camera Name match
+    if (!matched) {
+      for (const cam of mat.cameras) {
+        const camName = String(cam.name || "").toLowerCase();
+        if (camName.includes(query) || (queryNormalized && camName.includes(queryNormalized))) {
+          matched = true;
+          matchKind = "cam";
+          matchDetail = cam.name;
+          break;
+        }
+      }
+    }
+
+    if (matched) {
+      let dist = null;
+      if (state.gps.lat != null && mat.latitude != null && mat.longitude != null) {
+        dist = getDistanceMeters(state.gps.lat, state.gps.lng, mat.latitude, mat.longitude);
+      }
+      results.push({ mat, matchKind, matchDetail, dist });
+    }
+  }
+
+  // Sorting: exact MAT match first, then by distance, then numerical order
+  results.sort((a, b) => {
+    const aExact = String(a.mat.matId) === queryNormalized;
+    const bExact = String(b.mat.matId) === queryNormalized;
+    if (aExact && !bExact) return -1;
+    if (!aExact && bExact) return 1;
+    if (a.dist != null && b.dist != null) return a.dist - b.dist;
+    return Number(a.mat.matId) - Number(b.mat.matId);
+  });
+
+  state.searchResults = results.slice(0, 15);
+  state.searchSelectedIndex = -1;
+  renderSearchDropdown();
+}
+
+function handleSearchKeydown(event) {
+  if (!state.searchResults.length || els.searchDropdown?.hidden) return;
+
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    state.searchSelectedIndex = Math.min(state.searchSelectedIndex + 1, state.searchResults.length - 1);
+    updateSearchHighlight();
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    state.searchSelectedIndex = Math.max(state.searchSelectedIndex - 1, 0);
+    updateSearchHighlight();
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    const idx = state.searchSelectedIndex >= 0 ? state.searchSelectedIndex : 0;
+    const item = state.searchResults[idx];
+    if (item) {
+      selectSearchResult(item.mat.matId, item.matchDetail);
+    }
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    closeSearchDropdown();
+  }
+}
+
+function updateSearchHighlight() {
+  if (!els.searchDropdown) return;
+  const items = els.searchDropdown.querySelectorAll(".search-item");
+  items.forEach((el, idx) => {
+    el.classList.toggle("is-selected", idx === state.searchSelectedIndex);
+    if (idx === state.searchSelectedIndex) {
+      el.scrollIntoView({ block: "nearest" });
+    }
+  });
+}
+
+function renderSearchDropdown() {
+  if (!els.searchDropdown) return;
+  if (!state.searchResults.length) {
+    els.searchDropdown.innerHTML = `<div class="search-empty">Aucun équipement trouvé pour "${escapeHtml(state.searchQuery)}"</div>`;
+    els.searchDropdown.hidden = false;
+    return;
+  }
+
+  const html = state.searchResults.map((item, idx) => {
+    const { mat, matchKind, matchDetail, dist } = item;
+    let badgeClass = "badge-mat";
+    let badgeText = "MAT";
+    let title = `MAT ${mat.matId}`;
+    let sub = `${mat.aps.length} AP · ${mat.cameras.length} Cam`;
+
+    if (matchKind === "ap") {
+      badgeClass = "badge-ap";
+      badgeText = "AP";
+      title = `${matchDetail} (MAT ${mat.matId})`;
+    } else if (matchKind === "cam") {
+      badgeClass = "badge-cam";
+      badgeText = "CAM";
+      title = `${matchDetail} (MAT ${mat.matId})`;
+    }
+
+    const distTag = dist != null ? `<span class="search-dist-tag">📍 ${formatDistance(dist)}</span>` : "";
+
+    return `<div class="search-item ${idx === state.searchSelectedIndex ? "is-selected" : ""}" data-index="${idx}" data-mat-id="${mat.matId}" data-target-name="${escapeHtml(matchDetail)}">
+      <div class="search-item-left">
+        <span class="search-badge ${badgeClass}">${badgeText}</span>
+        <span class="search-item-title">${escapeHtml(title)}</span>
+      </div>
+      <div class="search-item-right">
+        ${distTag}
+        <span>${sub}</span>
+      </div>
+    </div>`;
+  }).join("");
+
+  els.searchDropdown.innerHTML = html;
+  els.searchDropdown.hidden = false;
+
+  els.searchDropdown.querySelectorAll(".search-item").forEach((el) => {
+    el.addEventListener("click", () => {
+      const matId = el.dataset.matId;
+      const targetName = el.dataset.targetName;
+      selectSearchResult(matId, targetName);
+    });
+  });
+}
+
+function selectSearchResult(matId, targetName = "") {
+  closeSearchDropdown();
+  const mat = state.mats.find((m) => String(m.matId) === String(matId));
+  if (!mat) return;
+
+  openDrawer(mat.matId, { focus: true });
+
+  if (targetName) {
+    setTimeout(() => {
+      const wraps = document.querySelectorAll(".ori-clock-wrap");
+      for (const wrap of wraps) {
+        if (wrap.dataset.deviceCard === targetName || wrap.textContent.includes(targetName)) {
+          wrap.scrollIntoView({ behavior: "smooth", block: "center" });
+          wrap.classList.add("is-highlight-target");
+          setTimeout(() => wrap.classList.remove("is-highlight-target"), 2500);
+          break;
+        }
+      }
+    }, 250);
+  }
+}
+
+function closeSearchDropdown() {
+  if (els.searchDropdown) els.searchDropdown.hidden = true;
+  state.searchSelectedIndex = -1;
+}
+
+function clearSearch() {
+  if (els.searchInput) els.searchInput.value = "";
+  state.searchQuery = "";
+  if (els.searchClear) els.searchClear.hidden = true;
+  closeSearchDropdown();
+}
+
+/* -------------------------------------------------------------
+   GPS TRACKING & DISTANCES
+------------------------------------------------------------- */
+function toggleGps() {
+  if (state.gps.watching) {
+    stopGps();
+    toast("GPS arrêté");
   } else {
-    els.gpsAssistText.hidden = true;
-    els.gpsAssistText.textContent = "";
+    startGps(true);
   }
 }
 
-function toggleCompassAssist() {
-  if (state.compass.watching) {
-    stopCompassAssist();
+function startGps(centerMap = true) {
+  if (!navigator.geolocation) {
+    toast("GPS non disponible sur cet appareil");
     return;
   }
-  startCompassAssist();
+  state.gps.watching = true;
+  updateGpsUi();
+  toast("Recherche signal GPS haute précision…");
+
+  let firstFix = true;
+  state.gps.watchId = navigator.geolocation.watchPosition(
+    (pos) => {
+      const { latitude, longitude, accuracy, heading } = pos.coords;
+      state.gps.lat = latitude;
+      state.gps.lng = longitude;
+      state.gps.accuracy = accuracy;
+      if (Number.isFinite(heading)) state.gps.heading = heading;
+      state.gps.error = null;
+
+      updateGpsMarker(latitude, longitude, accuracy, state.gps.heading || state.compass.heading);
+      updateGpsUi();
+
+      if (firstFix && centerMap && state.map) {
+        firstFix = false;
+        state.map.setView([latitude, longitude], Math.max(state.map.getZoom(), 19), { animate: true });
+        toast(`GPS connecté (±${Math.round(accuracy)}m)`);
+      }
+
+      if (state.selectedMatId) {
+        updateDrawerDistance();
+      }
+    },
+    (err) => {
+      state.gps.error = err.message;
+      if (err.code === 1) {
+        toast("Autorisation GPS refusée");
+      } else {
+        toast("Signal GPS faible ou indisponible");
+      }
+      updateGpsUi();
+    },
+    { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+  );
 }
 
-async function startCompassAssist() {
-  state.compass.error = null;
-  updateGpsAssistUi();
+function stopGps() {
+  if (state.gps.watchId != null) {
+    navigator.geolocation.clearWatch(state.gps.watchId);
+    state.gps.watchId = null;
+  }
+  state.gps.watching = false;
+  state.gps.lat = null;
+  state.gps.lng = null;
+  state.gps.accuracy = null;
+  if (state.gps.marker && state.map) {
+    state.map.removeLayer(state.gps.marker);
+    state.gps.marker = null;
+  }
+  if (state.gps.circle && state.map) {
+    state.map.removeLayer(state.gps.circle);
+    state.gps.circle = null;
+  }
+  updateGpsUi();
+  if (state.selectedMatId) updateDrawerDistance();
+}
 
-  // Location prompt first (native browser “Allow location?” popup).
-  const gpsOk = await requestGpsFix();
-  if (!gpsOk) {
-    updateGpsAssistUi();
-    return;
+function updateGpsMarker(lat, lng, accuracy, heading) {
+  if (!state.map) return;
+  const latlng = [lat, lng];
+
+  if (!state.gps.marker) {
+    const icon = L.divIcon({
+      className: "user-gps-marker",
+      html: `<div class="user-gps-pulse"></div><div class="user-gps-dot"><div class="user-gps-cone" id="user-gps-cone"></div></div>`,
+      iconSize: [24, 24],
+      iconAnchor: [12, 12],
+    });
+    state.gps.marker = L.marker(latlng, { icon, zIndexOffset: 2500 }).addTo(state.map);
+    state.gps.circle = L.circle(latlng, {
+      radius: accuracy || 8,
+      color: "#38bdf8",
+      weight: 1.5,
+      fillColor: "#38bdf8",
+      fillOpacity: 0.12,
+      interactive: false,
+    }).addTo(state.map);
+  } else {
+    state.gps.marker.setLatLng(latlng);
+    state.gps.circle.setLatLng(latlng);
+    state.gps.circle.setRadius(accuracy || 8);
   }
 
-  let lastUi = 0;
-  const onOrientation = (event) => {
-    const heading = Number.isFinite(event.webkitCompassHeading)
-      ? event.webkitCompassHeading
-      : (Number.isFinite(event.alpha) ? (360 - event.alpha) % 360 : null);
-    if (heading == null) return;
-    state.compass.heading = heading;
-    state.compass.estimatedClock = clockFromHeading(heading, 0);
-    const now = Date.now();
-    if (now - lastUi < 400) return;
-    lastUi = now;
-    const mat = state.mats.find((item) => item.matId === state.selectedMatId);
+  const cone = document.getElementById("user-gps-cone");
+  if (cone) {
+    if (Number.isFinite(heading)) {
+      cone.style.display = "block";
+      cone.style.transform = `translateX(-50%) rotate(${heading}deg)`;
+    } else {
+      cone.style.display = "none";
+    }
+  }
+}
+
+function updateGpsUi() {
+  if (!els.btnGpsToggle) return;
+  if (state.gps.watching) {
+    els.btnGpsToggle.classList.add("is-active");
+    const accStr = state.gps.accuracy ? ` ±${Math.round(state.gps.accuracy)}m` : "";
+    els.btnGpsToggle.textContent = `📍 GPS${accStr}`;
+    els.btnGpsToggle.classList.toggle("is-pulsing", state.gps.accuracy != null);
+  } else {
+    els.btnGpsToggle.classList.remove("is-active", "is-pulsing");
+    els.btnGpsToggle.textContent = "📍 GPS";
+  }
+}
+
+function updateDrawerDistance() {
+  if (!els.drawerDistance) return;
+  const mat = state.mats.find((m) => String(m.matId) === String(state.selectedMatId));
+  if (mat && state.gps.lat != null && mat.latitude != null && mat.longitude != null) {
+    const d = getDistanceMeters(state.gps.lat, state.gps.lng, mat.latitude, mat.longitude);
+    els.drawerDistance.textContent = `📍 ${formatDistance(d)}`;
+    els.drawerDistance.hidden = false;
+  } else {
+    els.drawerDistance.hidden = true;
+  }
+}
+
+function getDistanceMeters(lat1, lon1, lat2, lon2) {
+  if (!Number.isFinite(lat1) || !Number.isFinite(lon1) || !Number.isFinite(lat2) || !Number.isFinite(lon2)) return null;
+  const R = 6371e3; // metres
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(R * c);
+}
+
+function formatDistance(meters) {
+  if (!Number.isFinite(meters)) return "";
+  if (meters < 1000) return `${meters}m`;
+  return `${(meters / 1000).toFixed(1)}km`;
+}
+
+/* -------------------------------------------------------------
+   ADAPTIVE BEACH COMPASS & HORLOGE (Beach = 12h)
+------------------------------------------------------------- */
+function setHorlogeMode(mode) {
+  state.horlogeMode = mode;
+  const isAdapted = mode === "adapted";
+  els.btnModeAdapted?.classList.toggle("is-active", isAdapted);
+  els.btnModeNormal?.classList.toggle("is-active", !isAdapted);
+  if (els.drawerModeBtn) {
+    els.drawerModeBtn.textContent = isAdapted ? "🏖️ Adapté" : "⏱️ Normal";
+  }
+  if (els.horlogeFooterHint) {
+    els.horlogeFooterHint.textContent = isAdapted
+      ? "Mode Adapté : la boussole tourne le cadran pour que 12h pointe toujours vers la plage."
+      : "Mode Normal : cadran fixe. Placez-vous face à la plage physique pour régler l'orientation.";
+  }
+
+  if (isAdapted) {
+    if (!state.compass.watching) void startCompass();
+    updateHorlogeDial(state.compass.heading);
+  } else {
+    // Reset dial to static 0 rotation (12 at top)
+    if (els.horlogeRotatingDial) {
+      els.horlogeRotatingDial.style.transform = "none";
+    }
+    if (els.horlogeAimValue) {
+      els.horlogeAimValue.textContent = "12h (Plage en face)";
+    }
+  }
+
+  // Refresh drawer cards if open to update suggestions
+  if (state.selectedMatId) {
+    const mat = state.mats.find((m) => String(m.matId) === String(state.selectedMatId));
     if (mat) renderDrawer(mat);
-    else updateGpsAssistUi();
-  };
-  const bind = () => {
-    window.addEventListener("deviceorientationabsolute", onOrientation, true);
-    window.addEventListener("deviceorientation", onOrientation, true);
-    state.compass.watching = true;
-    state.compass._onOrientation = onOrientation;
-    toast("GPS on · beach = 12");
-    updateGpsAssistUi();
-  };
+  }
+}
 
+function toggleHorlogeMode() {
+  setHorlogeMode(state.horlogeMode === "adapted" ? "normal" : "adapted");
+}
+
+function toggleHorlogeWidget(forceOpen) {
+  const next = typeof forceOpen === "boolean" ? forceOpen : !state.horlogeOpen;
+  state.horlogeOpen = next;
+  if (els.floatingHorloge) els.floatingHorloge.hidden = !next;
+  if (els.btnHorlogeToggle) els.btnHorlogeToggle.classList.toggle("is-active", next);
+  if (next && state.horlogeMode === "adapted" && !state.compass.watching) {
+    void startCompass();
+  }
+}
+
+async function startCompass() {
+  state.compass.error = null;
   if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
     try {
       const permission = await DeviceOrientationEvent.requestPermission();
       if (permission !== "granted") {
-        state.compass.error = "Motion denied";
-        toast("Allow motion for compass");
-        // Still mark GPS active so location was granted.
-        state.compass.watching = true;
-        updateGpsAssistUi();
+        state.compass.error = "Refusé";
+        toast("Autorisez les capteurs pour la boussole");
         return;
       }
-      bind();
     } catch {
-      state.compass.error = "No compass";
-      state.compass.watching = true;
-      toast("GPS on · set clocks manually");
-      updateGpsAssistUi();
-    }
-    return;
-  }
-  if (!window.DeviceOrientationEvent) {
-    state.compass.watching = true;
-    toast("GPS on · set clocks manually");
-    updateGpsAssistUi();
-    return;
-  }
-  bind();
-}
-
-function requestGpsFix() {
-  return new Promise((resolve) => {
-    if (!navigator.geolocation) {
-      state.compass.error = "No GPS";
-      toast("GPS not available");
-      resolve(false);
+      state.compass.error = "Non supporté";
+      toast("Boussole non disponible sur cet appareil");
       return;
     }
-    navigator.geolocation.getCurrentPosition(
-      () => {
-        toast("Location allowed");
-        resolve(true);
-      },
-      (error) => {
-        if (error?.code === 1) {
-          state.compass.error = "Location denied";
-          toast("Allow location when prompted");
-        } else {
-          state.compass.error = "GPS failed";
-          toast("Could not get location");
-        }
-        resolve(false);
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
-    );
-  });
+  }
+
+  let lastUi = 0;
+  const onOrientation = (event) => {
+    let heading = null;
+    if (Number.isFinite(event.webkitCompassHeading)) {
+      heading = event.webkitCompassHeading;
+    } else if (Number.isFinite(event.alpha)) {
+      heading = (360 - event.alpha) % 360;
+    }
+    if (heading == null) return;
+    state.compass.heading = heading;
+    state.compass.estimatedClock = clockFromHeading(heading, BEACH_BEARING);
+
+    const now = Date.now();
+    if (now - lastUi > 120) {
+      lastUi = now;
+      updateHorlogeDial(heading);
+    }
+  };
+
+  window.addEventListener("deviceorientationabsolute", onOrientation, true);
+  window.addEventListener("deviceorientation", onOrientation, true);
+  state.compass.watching = true;
+  state.compass._onOrientation = onOrientation;
 }
 
-function stopCompassAssist() {
+function stopCompass() {
   if (state.compass._onOrientation) {
     window.removeEventListener("deviceorientationabsolute", state.compass._onOrientation, true);
     window.removeEventListener("deviceorientation", state.compass._onOrientation, true);
+    state.compass._onOrientation = null;
   }
   state.compass.watching = false;
-  state.compass._onOrientation = null;
   state.compass.heading = null;
   state.compass.estimatedClock = null;
-  state.compass.error = null;
-  const mat = state.mats.find((item) => item.matId === state.selectedMatId);
-  if (mat) renderDrawer(mat);
-  else updateGpsAssistUi();
+  if (els.horlogeRotatingDial) els.horlogeRotatingDial.style.transform = "none";
 }
 
-function clockFromHeading(headingDegrees, beachBearingDegrees = 0) {
+function updateHorlogeDial(heading) {
+  if (state.horlogeMode !== "adapted" || heading == null) return;
+
+  // Relative angle to beach (Beach = 58°):
+  const relBeach = ((BEACH_BEARING - heading) % 360 + 360) % 360;
+  if (els.horlogeRotatingDial) {
+    els.horlogeRotatingDial.style.transform = `rotate(${relBeach}deg)`;
+  }
+  const clock = clockFromHeading(heading, BEACH_BEARING);
+  if (els.horlogeAimValue) {
+    els.horlogeAimValue.textContent = `${clock}h${clock === 12 ? " (Plage)" : ""}`;
+  }
+  if (els.horlogeHeadingValue) {
+    els.horlogeHeadingValue.textContent = `${Math.round(heading)}°`;
+  }
+
+  // Update user gps marker cone heading if active
+  const cone = document.getElementById("user-gps-cone");
+  if (cone && state.gps.watching) {
+    cone.style.display = "block";
+    cone.style.transform = `translateX(-50%) rotate(${heading}deg)`;
+  }
+
+  // Update aim on drawer clock buttons if open
+  if (state.selectedMatId) {
+    document.querySelectorAll(".clock-card").forEach((card) => {
+      card.querySelectorAll(".clock-hour").forEach((btn) => {
+        const h = Number(btn.dataset.clockHour);
+        btn.classList.toggle("suggest", h === clock);
+      });
+      const applyBtn = card.querySelector("[data-apply-estimate]");
+      if (applyBtn) {
+        applyBtn.textContent = `🎯 Viseur boussole → ${clock}h`;
+      }
+    });
+  }
+}
+
+/**
+ * 12h = Beach (Plage). In Casablanca Port, the beach bearing is 58°.
+ * Every 30 degrees clockwise corresponds to one hour.
+ */
+function clockFromHeading(headingDegrees, beachBearingDegrees = BEACH_BEARING) {
   if (!Number.isFinite(headingDegrees)) return null;
   const relative = ((Number(headingDegrees) - Number(beachBearingDegrees || 0)) % 360 + 360) % 360;
   let hour = Math.round(relative / 30) % 12;

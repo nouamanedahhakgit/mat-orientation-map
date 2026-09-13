@@ -1,5 +1,4 @@
 const DEFAULT_ZOOM = 19;
-const FIT_EXTRA_ZOOM = 3;
 const MAX_ZOOM = 22;
 const POLL_MS = 8000;
 const API_PATH = "/api/sheet";

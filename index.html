@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>MAT Orientation Map</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="./styles.css?v=12" />
+  <link rel="stylesheet" href="./styles.css?v=13" />
 </head>
 <body>
   <div id="login-screen" class="login-screen">
@@ -82,6 +82,26 @@
           </button>
         </div>
 
+        <!-- Beach Calibration Section -->
+        <div class="horloge-calibrate-section">
+          <div class="calibrate-header">
+            <span class="calibrate-title">🎯 Calibrage Plage (12h)</span>
+            <button type="button" id="btn-calibrate-compass" class="calibrate-btn-primary" title="Définir l'orientation actuelle du téléphone comme 12h">
+              📍 Aligner 12h ici
+            </button>
+          </div>
+          <div class="calibrate-presets">
+            <button type="button" class="preset-chip" data-bearing="330" title="Direction Port/Océan Casablanca (~330° NW)">🌊 Port 330°</button>
+            <button type="button" class="preset-chip" data-bearing="0" title="Nord Géographique (0° N)">🧭 Nord 0°</button>
+            <button type="button" class="preset-chip" data-bearing="58" title="Est / Plage (~58° NE)">🏖️ Est 58°</button>
+            <div class="calibrate-stepper">
+              <button type="button" id="btn-bearing-minus" class="step-btn" title="-5°">-5°</button>
+              <button type="button" id="btn-bearing-custom" class="step-val" title="Modifier l'angle manuellement">330° NW</button>
+              <button type="button" id="btn-bearing-plus" class="step-btn" title="+5°">+5°</button>
+            </div>
+          </div>
+        </div>
+
         <div class="horloge-dial-wrap">
           <div class="horloge-reticle" title="Direction où pointe le téléphone">
             <span class="reticle-arrow">▼</span>
@@ -119,7 +139,7 @@
           </div>
           <div class="telemetry-item">
             <small>Réf. Plage</small>
-            <strong>58° NE</strong>
+            <strong id="horloge-beach-value">330° NW</strong>
           </div>
         </div>
 
@@ -141,6 +161,7 @@
         <span id="drawer-meta" class="drawer-meta" hidden></span>
         <span id="drawer-distance" class="drawer-distance" hidden>📍 —</span>
         <button type="button" id="drawer-mode-btn" class="ghost mode-btn" title="Basculer Mode Horloge (Adapté / Fixe)">🏖️ Adapté</button>
+        <button type="button" id="drawer-beach-btn" class="ghost beach-chip-btn" title="Calibrer la direction de la plage">🎯 330°</button>
         <button type="button" id="drawer-close" class="ghost icon-btn" aria-label="Close">✕</button>
       </div>
       <div id="drawer-body" class="drawer-body"></div>
@@ -148,6 +169,6 @@
   </div>
   <div id="toast" class="toast" hidden></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="./app.js?v=12" defer></script>
+  <script src="./app.js?v=13" defer></script>
 </body>
 </html>

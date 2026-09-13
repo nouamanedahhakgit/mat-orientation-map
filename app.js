@@ -5,8 +5,30 @@ const API_PATH = "/api/sheet";
 const DIRECT_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycby8sXiPEIWwS84rly0e5jSATF5qRgmIcvussuH0zAJRJ0SsMhrP0vcto8ATXLAv0IkrCg/exec";
 const VIEW_CACHE_KEY = "mat-orientation-map-view-v1";
 const AUTH_CACHE_KEY = "mat-orientation-map-auth-v1";
-/** Yard Beach bearing reference (Casablanca Port: 58° NE). Beach strictly = 12h */
-const BEACH_BEARING = 58;
+/** Yard Beach bearing reference (Casablanca Port: 330° NW facing the ocean/basin). Beach strictly = 12h */
+const DEFAULT_BEACH_BEARING = 330;
+const BEACH_BEARING_CACHE_KEY = "mat_beach_bearing";
+
+function readBeachBearingCache() {
+  try {
+    const raw = localStorage.getItem(BEACH_BEARING_CACHE_KEY);
+    if (raw != null) {
+      const num = Number(raw);
+      if (Number.isFinite(num)) {
+        return ((Math.round(num) % 360) + 360) % 360;
+      }
+    }
+  } catch {}
+  return DEFAULT_BEACH_BEARING;
+}
+
+function getBearingCompassText(deg) {
+  const normalized = ((Math.round(deg) % 360) + 360) % 360;
+  const directions = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+  const index = Math.round((normalized / 22.5)) % 16;
+  return `${normalized}° ${directions[index]}`;
+}
+
 /** Public map matches local #network-map default: TCE only (no TC3). */
 const TERMINAL_FILTER = "TCE";
 
@@ -23,6 +45,7 @@ const state = {
   _mapReady: false,
   auth: readAuthCache(),
   pending: Object.create(null),
+  beachBearing: readBeachBearingCache(),
   horlogeMode: "adapted", // "adapted" (rotates with compass towards beach) | "normal" (fixed 12h en haut)
   horlogeOpen: false,
   searchQuery: "",
@@ -74,6 +97,11 @@ const els = {
   btnHorlogeClose: document.querySelector("#btn-horloge-close"),
   btnModeAdapted: document.querySelector("#btn-mode-adapted"),
   btnModeNormal: document.querySelector("#btn-mode-normal"),
+  btnCalibrateCompass: document.querySelector("#btn-calibrate-compass"),
+  horlogeBeachValue: document.querySelector("#horloge-beach-value"),
+  btnBearingMinus: document.querySelector("#btn-bearing-minus"),
+  btnBearingPlus: document.querySelector("#btn-bearing-plus"),
+  btnBearingCustom: document.querySelector("#btn-bearing-custom"),
   horlogeRotatingDial: document.querySelector("#horloge-rotating-dial"),
   horlogeAimValue: document.querySelector("#horloge-aim-value"),
   horlogeHeadingValue: document.querySelector("#horloge-heading-value"),
@@ -84,6 +112,7 @@ const els = {
   drawerMeta: document.querySelector("#drawer-meta"),
   drawerDistance: document.querySelector("#drawer-distance"),
   drawerModeBtn: document.querySelector("#drawer-mode-btn"),
+  drawerBeachBtn: document.querySelector("#drawer-beach-btn"),
   drawerBody: document.querySelector("#drawer-body"),
   drawerClose: document.querySelector("#drawer-close"),
   toast: document.querySelector("#toast"),
@@ -103,6 +132,18 @@ els.btnHorlogeClose?.addEventListener("click", () => toggleHorlogeWidget(false))
 els.btnModeAdapted?.addEventListener("click", () => setHorlogeMode("adapted"));
 els.btnModeNormal?.addEventListener("click", () => setHorlogeMode("normal"));
 els.drawerModeBtn?.addEventListener("click", () => toggleHorlogeMode());
+els.drawerBeachBtn?.addEventListener("click", handleDrawerBeachClick);
+
+els.btnCalibrateCompass?.addEventListener("click", () => void calibrateBeachToCurrentHeading());
+els.btnBearingMinus?.addEventListener("click", () => setBeachBearing(state.beachBearing - 5));
+els.btnBearingPlus?.addEventListener("click", () => setBeachBearing(state.beachBearing + 5));
+els.btnBearingCustom?.addEventListener("click", promptCustomBearing);
+document.querySelectorAll(".horloge-calibrate-section .preset-chip").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const b = Number(btn.dataset.bearing);
+    if (Number.isFinite(b)) setBeachBearing(b);
+  });
+});
 
 // Search Listeners
 els.searchInput?.addEventListener("input", handleSearchInput);
@@ -151,6 +192,7 @@ function showApp() {
 }
 
 function startMapApp() {
+  updateBeachDisplay();
   if (!state._mapReady) {
     initMap();
     state._mapReady = true;
@@ -566,10 +608,16 @@ function hashSeed(text) {
 
 function getBeachRotation() {
   if (state.horlogeMode !== "adapted") return 0;
+  // On the static geographic Leaflet map (North-up), 12h points towards the beach (e.g. 330° NW)
+  return state.beachBearing;
+}
+
+function getHandheldDialRotation() {
+  if (state.horlogeMode !== "adapted") return 0;
   if (state.compass.watching && Number.isFinite(state.compass.heading)) {
-    return ((BEACH_BEARING - state.compass.heading) % 360 + 360) % 360;
+    return ((state.beachBearing - state.compass.heading) % 360 + 360) % 360;
   }
-  return BEACH_BEARING; // 58° NE
+  return 0; // When compass is off, 12h stays straight ahead (top of phone)
 }
 
 function matClockMarkerHtml(mat, devices, selected = false) {
@@ -730,6 +778,10 @@ function renderDrawer(mat) {
       ? "Mode Adapté actif : 12h pointe vers la plage physique. Cliquer pour passer en Mode Normal."
       : "Mode Normal actif : cadran fixe. Cliquer pour activer la boussole adaptée à la plage.";
   }
+  if (els.drawerBeachBtn) {
+    els.drawerBeachBtn.textContent = `🎯 ${state.beachBearing}°`;
+    els.drawerBeachBtn.title = `Réf. Plage : ${getBearingCompassText(state.beachBearing)}. Cliquer pour calibrer / ajuster.`;
+  }
 
   const isAdapted = state.horlogeMode === "adapted";
   const estimated = isAdapted ? state.compass.estimatedClock : null;
@@ -822,7 +874,7 @@ function renderClockCard(kind, key, subtitle, clock, estimated, matId) {
   const pendingKey = `${matId}:${kind}:${key}`;
   const pending = Boolean(state.pending[pendingKey]);
   const isAdapted = state.horlogeMode === "adapted";
-  const dialRot = getBeachRotation();
+  const dialRot = getHandheldDialRotation();
 
   return `
     <article class="clock-card ${pending ? "is-pending" : ""}" data-kind="${escapeHtml(kind)}" data-key="${escapeHtml(key)}" data-mat-id="${escapeHtml(matId)}">
@@ -1256,6 +1308,91 @@ function formatDistance(meters) {
 }
 
 /* -------------------------------------------------------------
+   BEACH CALIBRATION & PERSISTENCE (Beach = 12h)
+------------------------------------------------------------- */
+function updateBeachDisplay() {
+  const text = getBearingCompassText(state.beachBearing);
+  if (els.horlogeBeachValue) {
+    els.horlogeBeachValue.textContent = text;
+  }
+  if (els.btnBearingCustom) {
+    els.btnBearingCustom.textContent = text;
+  }
+  if (els.drawerBeachBtn) {
+    els.drawerBeachBtn.textContent = `🎯 ${state.beachBearing}°`;
+    els.drawerBeachBtn.title = `Réf. Plage : ${text}. Cliquer pour ajuster.`;
+  }
+  document.querySelectorAll(".horloge-calibrate-section .preset-chip").forEach((chip) => {
+    const b = Number(chip.dataset.bearing);
+    chip.classList.toggle("is-selected", b === state.beachBearing);
+  });
+}
+
+function setBeachBearing(bearingDeg, notify = true) {
+  const normalized = ((Math.round(Number(bearingDeg) || 0) % 360) + 360) % 360;
+  state.beachBearing = normalized;
+  try {
+    localStorage.setItem(BEACH_BEARING_CACHE_KEY, String(normalized));
+  } catch {}
+
+  updateBeachDisplay();
+
+  // Re-render map markers so clock rings immediately adopt new beach orientation
+  renderMarkers();
+
+  // If drawer is open, update drawer AP and Camera dials
+  if (state.selectedMatId) {
+    const mat = state.mats.find((m) => String(m.matId) === String(state.selectedMatId));
+    if (mat) renderDrawer(mat);
+  }
+
+  // Update floating dial
+  if (state.compass.watching && Number.isFinite(state.compass.heading)) {
+    updateHorlogeDial(state.compass.heading);
+  } else {
+    updateHorlogeDial(null);
+  }
+
+  if (notify) {
+    toast(`🎯 Plage (12h) définie sur ${getBearingCompassText(normalized)}`);
+  }
+}
+
+async function calibrateBeachToCurrentHeading() {
+  if (!state.compass.watching) {
+    await startCompass();
+  }
+  if (!Number.isFinite(state.compass.heading)) {
+    promptCustomBearing();
+    return;
+  }
+  const heading = Math.round(state.compass.heading);
+  setBeachBearing(heading, false);
+  toast(`🎯 Plage (12h) calibrée sur votre visée : ${getBearingCompassText(heading)}`);
+}
+
+function promptCustomBearing() {
+  const current = state.beachBearing;
+  const input = window.prompt(
+    `Entrez l'orientation de la plage en degrés (0°-359°) :\nEx: 330 (Port Casablanca / Mer), 0 (Nord), 58 (Est)`,
+    String(current)
+  );
+  if (input !== null && input.trim() !== "") {
+    const num = Number(input);
+    if (Number.isFinite(num)) {
+      setBeachBearing(num, true);
+    } else {
+      toast("Angle invalide (doit être entre 0° et 359°)");
+    }
+  }
+}
+
+function handleDrawerBeachClick() {
+  toggleHorlogeWidget(true);
+  toast(`🎯 Réf. Plage : ${getBearingCompassText(state.beachBearing)}. Utilisez les boutons pour calibrer.`);
+}
+
+/* -------------------------------------------------------------
    ADAPTIVE BEACH COMPASS & HORLOGE (Beach = 12h)
 ------------------------------------------------------------- */
 function setHorlogeMode(mode) {
@@ -1268,7 +1405,7 @@ function setHorlogeMode(mode) {
   }
   if (els.horlogeFooterHint) {
     els.horlogeFooterHint.textContent = isAdapted
-      ? "Mode Adapté : AP et Caméras orientés selon la plage physique (Beach=12h)."
+      ? `Mode Adapté : AP et Caméras orientés selon la plage (${getBearingCompassText(state.beachBearing)} = 12h).`
       : "Mode Normal : cadran fixe. Placez-vous face à la plage physique pour régler l'orientation.";
   }
 
@@ -1277,7 +1414,7 @@ function setHorlogeMode(mode) {
 
   if (isAdapted) {
     if (!state.compass.watching) void startCompass();
-    updateHorlogeDial(state.compass.heading != null ? state.compass.heading : BEACH_BEARING);
+    updateHorlogeDial(state.compass.heading != null ? state.compass.heading : null);
   } else {
     // Reset dials to static 0 rotation (12 at top)
     if (els.horlogeRotatingDial) {
@@ -1302,7 +1439,7 @@ function setHorlogeMode(mode) {
     if (mat) renderDrawer(mat);
   }
 
-  toast(isAdapted ? "🏖️ Mode Adapté : AP et Caméras orientés selon la plage (12h)" : "⏱️ Mode Normal : cadran fixe");
+  toast(isAdapted ? `🏖️ Mode Adapté : Plage = ${getBearingCompassText(state.beachBearing)} (12h)` : "⏱️ Mode Normal : cadran fixe");
 }
 
 function toggleHorlogeMode() {
@@ -1314,8 +1451,11 @@ function toggleHorlogeWidget(forceOpen) {
   state.horlogeOpen = next;
   if (els.floatingHorloge) els.floatingHorloge.hidden = !next;
   if (els.btnHorlogeToggle) els.btnHorlogeToggle.classList.toggle("is-active", next);
-  if (next && state.horlogeMode === "adapted" && !state.compass.watching) {
-    void startCompass();
+  if (next) {
+    updateBeachDisplay();
+    if (state.horlogeMode === "adapted" && !state.compass.watching) {
+      void startCompass();
+    }
   }
 }
 
@@ -1346,7 +1486,7 @@ async function startCompass() {
     }
     if (heading == null) return;
     state.compass.heading = heading;
-    state.compass.estimatedClock = clockFromHeading(heading, BEACH_BEARING);
+    state.compass.estimatedClock = clockFromHeading(heading, state.beachBearing);
 
     const now = Date.now();
     if (now - lastUi > 120) {
@@ -1374,14 +1514,24 @@ function stopCompass() {
 }
 
 function updateHorlogeDial(heading) {
-  if (state.horlogeMode !== "adapted" || heading == null) return;
+  if (state.horlogeMode !== "adapted") return;
 
-  // Relative angle to beach (Beach = 58°):
-  const relBeach = ((BEACH_BEARING - heading) % 360 + 360) % 360;
+  if (heading == null) {
+    if (els.horlogeRotatingDial) els.horlogeRotatingDial.style.transform = "none";
+    if (els.horlogeAimValue) els.horlogeAimValue.textContent = "12h (Plage)";
+    if (els.horlogeHeadingValue) els.horlogeHeadingValue.textContent = "—";
+    document.querySelectorAll(".clock-face.is-adapted").forEach((face) => {
+      face.style.setProperty("--dial-rot", "0deg");
+    });
+    return;
+  }
+
+  // Relative angle to beach (Beach = state.beachBearing):
+  const relBeach = ((state.beachBearing - heading) % 360 + 360) % 360;
   if (els.horlogeRotatingDial) {
     els.horlogeRotatingDial.style.transform = `rotate(${relBeach}deg)`;
   }
-  const clock = clockFromHeading(heading, BEACH_BEARING);
+  const clock = clockFromHeading(heading, state.beachBearing);
   if (els.horlogeAimValue) {
     els.horlogeAimValue.textContent = `${clock}h${clock === 12 ? " (Plage)" : ""}`;
   }
@@ -1392,11 +1542,6 @@ function updateHorlogeDial(heading) {
   // Rotate all AP and Camera dials in drawer in real time:
   document.querySelectorAll(".clock-face.is-adapted").forEach((face) => {
     face.style.setProperty("--dial-rot", `${relBeach}deg`);
-  });
-
-  // Rotate all AP and Camera clock rings on the map in real time:
-  document.querySelectorAll(".mat-clock-ring.is-adapted").forEach((ring) => {
-    ring.style.setProperty("--ring-rot", `${relBeach}deg`);
   });
 
   // Update user gps marker cone heading if active
@@ -1422,12 +1567,13 @@ function updateHorlogeDial(heading) {
 }
 
 /**
- * 12h = Beach (Plage). In Casablanca Port, the beach bearing is 58°.
+ * 12h = Beach (Plage). Default is state.beachBearing (330° NW for Casablanca port).
  * Every 30 degrees clockwise corresponds to one hour.
  */
-function clockFromHeading(headingDegrees, beachBearingDegrees = BEACH_BEARING) {
+function clockFromHeading(headingDegrees, beachBearingDegrees = null) {
   if (!Number.isFinite(headingDegrees)) return null;
-  const relative = ((Number(headingDegrees) - Number(beachBearingDegrees || 0)) % 360 + 360) % 360;
+  const ref = beachBearingDegrees != null ? beachBearingDegrees : state.beachBearing;
+  const relative = ((Number(headingDegrees) - Number(ref || 0)) % 360 + 360) % 360;
   let hour = Math.round(relative / 30) % 12;
   if (hour === 0) hour = 12;
   return hour;

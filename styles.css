@@ -866,6 +866,120 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); 
   border-color: rgba(62, 199, 255, 0.35);
 }
 
+.horloge-calibrate-section {
+  background: rgba(8, 20, 30, 0.7);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.calibrate-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.calibrate-title {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #cde4f0;
+}
+.calibrate-btn-primary {
+  appearance: none;
+  background: linear-gradient(135deg, #0284c7, #0369a1);
+  color: #ffffff;
+  border: 1px solid #38bdf8;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+  transition: all 0.15s ease;
+}
+.calibrate-btn-primary:active {
+  transform: scale(0.96);
+}
+.calibrate-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.preset-chip {
+  appearance: none;
+  background: rgba(14, 34, 50, 0.85);
+  border: 1px solid rgba(62, 199, 255, 0.25);
+  color: #90b8d0;
+  font-size: 0.62rem;
+  font-weight: 600;
+  padding: 3px 7px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.preset-chip:hover, .preset-chip.is-selected {
+  background: rgba(62, 199, 255, 0.22);
+  color: #3ec7ff;
+  border-color: #3ec7ff;
+}
+.calibrate-stepper {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(10, 24, 36, 0.9);
+  border: 1px solid rgba(62, 199, 255, 0.3);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-left: auto;
+}
+.step-btn {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: #90b8d0;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+.step-btn:hover {
+  background: rgba(62, 199, 255, 0.15);
+  color: #fff;
+}
+.step-val {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid rgba(62, 199, 255, 0.2);
+  border-right: 1px solid rgba(62, 199, 255, 0.2);
+  color: #3ec7ff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+.beach-chip-btn {
+  font-size: 0.68rem;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(62, 199, 255, 0.12);
+  border: 1px solid rgba(62, 199, 255, 0.35);
+  color: #3ec7ff;
+  cursor: pointer;
+  white-space: nowrap;
+  font-weight: 700;
+}
+.beach-chip-btn:hover {
+  background: rgba(62, 199, 255, 0.25);
+  color: #ffffff;
+}
+
 .horloge-dial-wrap {
   position: relative;
   width: 200px;

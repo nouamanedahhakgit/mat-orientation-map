@@ -3,6 +3,7 @@ const FIT_EXTRA_ZOOM = 3;
 const MAX_ZOOM = 22;
 const POLL_MS = 8000;
 const API_PATH = "/api/sheet";
+const DIRECT_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycby8sXiPEIWwS84rly0e5jSATF5qRgmIcvussuH0zAJRJ0SsMhrP0vcto8ATXLAv0IkrCg/exec";
 const VIEW_CACHE_KEY = "mat-orientation-map-view-v1";
 const AUTH_CACHE_KEY = "mat-orientation-map-auth-v1";
 /** Yard Beach bearing reference (Casablanca Port: 58° NE). Beach strictly = 12h */
@@ -302,15 +303,42 @@ async function postSheet(body, options = {}) {
     payload.user = state.auth.user;
     payload.token = state.auth.token;
   }
-  const response = await fetch(API_PATH, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok && data.error) throw new Error(data.error);
-  if (!response.ok) throw new Error(`Sheet API ${response.status}`);
-  return data;
+
+  // Direct Google Apps Script call (supports CORS via text/plain to avoid preflight OPTIONS)
+  const callDirectWebhook = async () => {
+    const targetUrl = `${DIRECT_WEBHOOK_URL}?mode=${encodeURIComponent(payload.mode || "export")}`;
+    const res = await fetch(targetUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!data.ok && data.error) throw new Error(data.error);
+    if (!data.ok) throw new Error("Connexion à Google Sheets échouée");
+    return data;
+  };
+
+  // For mode "login", try proxy first; if rejected by old Netlify function, use direct webhook
+  try {
+    const response = await fetch(API_PATH, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok && data.ok) return data;
+    if (data && /mode must be/i.test(String(data.error || ""))) {
+      return await callDirectWebhook();
+    }
+    if (!response.ok && data.error) throw new Error(data.error);
+    if (!response.ok) throw new Error(`Sheet API ${response.status}`);
+    return data;
+  } catch (err) {
+    if (/mode must be|failed to fetch|network|400|404|500/i.test(String(err.message || ""))) {
+      return await callDirectWebhook();
+    }
+    throw err;
+  }
 }
 
 function parseSheetValues(values) {

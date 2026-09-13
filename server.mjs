@@ -99,7 +99,7 @@ async function postAppsScript(url, payload) {
   const first = await httpsJsonRequest(url, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json; charset=utf-8",
+      "Content-Type": "text/plain;charset=utf-8",
       Accept: "application/json",
     },
     body: serialized,

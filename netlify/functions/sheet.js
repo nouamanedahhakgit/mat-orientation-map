@@ -85,36 +85,24 @@ exports.handler = async (event) => {
 };
 
 async function postAppsScript(url, payload) {
-  const serialized = JSON.stringify(payload);
-  const first = await fetch(url, {
+  const res = await fetch(url, {
     method: "POST",
-    redirect: "manual",
+    redirect: "follow",
     headers: {
-      "Content-Type": "application/json; charset=utf-8",
+      "Content-Type": "text/plain;charset=utf-8",
       Accept: "application/json",
     },
-    body: serialized,
+    body: JSON.stringify(payload),
   });
 
-  let text = await first.text();
-  const location = first.headers.get("location");
-
-  if ([301, 302, 303, 307, 308].includes(first.status) && location) {
-    const second = await fetch(new URL(location, url).href, {
-      method: "GET",
-      redirect: "follow",
-      headers: { Accept: "application/json" },
-    });
-    text = await second.text();
-  }
-
+  const text = await res.text();
   try {
     return JSON.parse(text);
   } catch {
     throw new Error(
       /sign in|accounts\.google/i.test(text)
         ? "Apps Script blocked the request. Redeploy with Who has access = Anyone."
-        : `Apps Script returned non-JSON: ${text.slice(0, 180)}`,
+        : `Apps Script returned non-JSON (${res.status}): ${text.slice(0, 180)}`,
     );
   }
 }

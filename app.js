@@ -175,6 +175,7 @@ async function handleLogin() {
     if (!payload.ok || !payload.token) throw new Error(payload.error || "Login failed");
     state.auth = {
       user: payload.user || user,
+      pass,
       token: payload.token,
       expiresAt: payload.expiresAt || null,
     };
@@ -299,12 +300,13 @@ async function loadSheet(showBusy = false) {
 async function postSheet(body, options = {}) {
   const withAuth = options.auth !== false;
   const payload = { ...body };
-  if (withAuth && state.auth?.token) {
-    payload.user = state.auth.user;
-    payload.token = state.auth.token;
+  if (withAuth && state.auth) {
+    if (state.auth.user) payload.user = state.auth.user;
+    if (state.auth.token) payload.token = state.auth.token;
+    if (state.auth.pass) payload.pass = state.auth.pass;
   }
 
-  // Direct Google Apps Script call (supports CORS via text/plain to avoid preflight OPTIONS)
+  // Direct Google Apps Script call (runs from user browser, avoids AWS IP blocking and Netlify timeouts)
   const callDirectWebhook = async () => {
     const targetUrl = `${DIRECT_WEBHOOK_URL}?mode=${encodeURIComponent(payload.mode || "export")}`;
     const res = await fetch(targetUrl, {
@@ -318,26 +320,23 @@ async function postSheet(body, options = {}) {
     return data;
   };
 
-  // For mode "login", try proxy first; if rejected by old Netlify function, use direct webhook
+  // Try direct webhook first (fastest, direct from user browser, no datacenter block)
   try {
-    const response = await fetch(API_PATH, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (response.ok && data.ok) return data;
-    if (data && /mode must be/i.test(String(data.error || ""))) {
-      return await callDirectWebhook();
+    return await callDirectWebhook();
+  } catch (directErr) {
+    // If direct failed (e.g. adblocker or strict firewall), try Netlify proxy fallback
+    try {
+      const response = await fetch(API_PATH, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.ok) return data;
+      throw new Error(data.error || `Erreur serveur (${response.status})`);
+    } catch (proxyErr) {
+      throw new Error(directErr.message || proxyErr.message || "Erreur de connexion");
     }
-    if (!response.ok && data.error) throw new Error(data.error);
-    if (!response.ok) throw new Error(`Sheet API ${response.status}`);
-    return data;
-  } catch (err) {
-    if (/mode must be|failed to fetch|network|400|404|500/i.test(String(err.message || ""))) {
-      return await callDirectWebhook();
-    }
-    throw err;
   }
 }
 

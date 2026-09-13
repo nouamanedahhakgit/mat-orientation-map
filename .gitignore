@@ -9,4 +9,5 @@ Thumbs.db
 # Secrets — set in Netlify UI, never commit
 .env
 .env.*
-!.env.example
+dist-fn/
+sheet.zip

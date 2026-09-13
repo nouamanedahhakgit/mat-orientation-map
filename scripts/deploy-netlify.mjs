@@ -2,9 +2,11 @@ import { createRequire } from "module";
 import fs from "fs";
 import crypto from "crypto";
 import path from "path";
+import { pathToFileURL } from "url";
 
 const require = createRequire(import.meta.url);
 const { NetlifyAPI } = require("C:/Users/ndahhak/AppData/Local/npm-cache/_npx/90d26507e643fcc0/node_modules/@netlify/api");
+const { zipFunctions } = await import(pathToFileURL("C:/Users/ndahhak/AppData/Local/npm-cache/_npx/90d26507e643fcc0/node_modules/@netlify/zip-it-and-ship-it/dist/main.js").href);
 
 let token = process.env.TOKEN;
 if (!token) {
@@ -20,7 +22,21 @@ const siteIds = [
   "063cc294-3850-4591-81c0-64e6dffe924e",
 ];
 const src = process.env.SRC || path.resolve(".");
-const fnZip = process.env.FNZIP || path.join(src, "sheet.zip");
+const distFn = path.join(src, "dist-fn");
+if (!fs.existsSync(distFn)) fs.mkdirSync(distFn, { recursive: true });
+
+console.log("Zipping Netlify functions...");
+const zipped = await zipFunctions([path.join(src, "netlify/functions")], distFn);
+const functions = {};
+const fnShaToInfo = {};
+for (const fn of zipped) {
+  const buf = fs.readFileSync(fn.path);
+  const sha = crypto.createHash("sha256").update(buf).digest("hex");
+  functions[fn.name] = sha;
+  fnShaToInfo[sha] = { name: fn.name, path: fn.path, runtime: fn.runtime || "js" };
+  console.log(`Function ${fn.name}: sha256=${sha}`);
+}
+
 const api = new NetlifyAPI(token);
 
 function sha1(filePath) {
@@ -33,25 +49,24 @@ const files = {
   "/styles.css": sha1(path.join(src, "styles.css")),
   "/netlify.toml": sha1(path.join(src, "netlify.toml")),
 };
-const EXISTING_FUNCTION_SHA = "b2fa1ef342b68b7cbb9393996a4ca0e310a09172047af6dccc74251d3a8e6abb";
-const fnSha = EXISTING_FUNCTION_SHA;
 const shaToPath = {};
 for (const [p, sha] of Object.entries(files)) {
   shaToPath[sha] = p;
 }
 
 for (const siteId of siteIds) {
-  console.log("Starting deploy for site:", siteId);
+  console.log("\nStarting deploy for site:", siteId);
   const deploy = await api.createSiteDeploy({
     site_id: siteId,
+    siteId: siteId,
     body: {
       files,
-      functions: { sheet: fnSha },
+      functions,
       draft: false,
-      title: "Search MAT/AP/CAM, Live GPS & Adaptive Beach Horloge (Beach=12h)",
+      title: "Fix login & direct webhook CSP with live GPS & Beach horloge",
     },
   });
-  console.log("deploy", siteId, deploy.id, "required:", deploy.required?.length, "required_functions:", deploy.required_functions?.length);
+  console.log("deploy", siteId, deploy.id, "required files:", deploy.required?.length, "required functions:", deploy.required_functions?.length);
 
   for (const sha of deploy.required || []) {
     const filePath = shaToPath[sha];
@@ -62,22 +77,31 @@ for (const siteId of siteIds) {
     const local = path.join(src, filePath.replace(/^\//, ""));
     await api.uploadDeployFile({
       deploy_id: deploy.id,
-      path: filePath.replace(/^\//, ""),
-      body: fs.createReadStream(local),
+      deployId: deploy.id,
+      path: encodeURI(filePath.replace(/^\//, "")),
+      body: () => fs.createReadStream(local),
     });
     console.log("uploaded file", filePath);
   }
 
-  for (const reqFn of deploy.required_functions || []) {
+  for (const reqFnSha of deploy.required_functions || []) {
+    const fnInfo = fnShaToInfo[reqFnSha];
+    if (!fnInfo) {
+      console.warn("Unknown required function SHA:", reqFnSha);
+      continue;
+    }
     try {
+      console.log(`Uploading function ${fnInfo.name} (${fnInfo.path})...`);
       await api.uploadDeployFunction({
         deploy_id: deploy.id,
-        name: "sheet",
-        body: fs.createReadStream(fnZip),
+        deployId: deploy.id,
+        name: encodeURI(fnInfo.name),
+        runtime: fnInfo.runtime,
+        body: () => fs.createReadStream(fnInfo.path),
       });
-      console.log("uploaded function sheet");
+      console.log("uploaded function", fnInfo.name);
     } catch (error) {
-      console.error("function upload failed", error.message || error);
+      console.error("function upload failed:", error.message || error);
       throw error;
     }
   }

@@ -253,6 +253,10 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); 
   background: rgba(245, 158, 11, 0.25);
   color: #fbbf24;
   border-color: rgba(245, 158, 11, 0.6);
+.search-term-tag.other {
+  background: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+  border-color: rgba(168, 85, 247, 0.45);
 }
 .search-unmapped-tag {
   font-size: 0.6rem;
@@ -271,9 +275,25 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); 
   border-radius: 999px;
   vertical-align: middle;
   margin-left: 6px;
+  text-transform: uppercase;
   background: rgba(245, 158, 11, 0.25);
   color: #fbbf24;
   border: 1px solid rgba(245, 158, 11, 0.5);
+}
+.drawer-term-badge.tce {
+  background: rgba(56, 189, 248, 0.2);
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.45);
+}
+.drawer-term-badge.tc3 {
+  background: rgba(245, 158, 11, 0.25);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.5);
+}
+.drawer-term-badge.other {
+  background: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+  border-color: rgba(168, 85, 247, 0.45);
 }
 .mat-caption-term {
   font-size: 7px;
@@ -285,6 +305,19 @@ html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); 
   margin-right: 2px;
   display: inline-block;
   vertical-align: middle;
+  text-transform: uppercase;
+}
+.mat-caption-term.tce {
+  background: #0284c7;
+  color: #ffffff;
+}
+.mat-caption-term.tc3 {
+  background: #f59e0b;
+  color: #0f172a;
+}
+.mat-caption-term.other {
+  background: #8b5cf6;
+  color: #ffffff;
 }
 .search-empty {
   padding: 12px;

@@ -469,6 +469,23 @@ function parseClock(value) {
   return n;
 }
 
+function formatMatLabel(matId, terminal = "") {
+  const idStr = String(matId || "").trim();
+  if (idStr.startsWith("TC3-RTG-") || idStr.startsWith("RTG-")) {
+    return `RTG ${idStr.replace(/^TC3-RTG-|^RTG-/i, "")}`;
+  }
+  if (idStr.startsWith("TC3-PORTIQUE-") || idStr.startsWith("PORTIQUE-")) {
+    return `Portique ${idStr.replace(/^TC3-PORTIQUE-|^PORTIQUE-/i, "")}`;
+  }
+  if (idStr.startsWith("TC3-")) {
+    return `MAT ${idStr.replace(/^TC3-/, "")}`;
+  }
+  if (idStr.startsWith("AP-")) {
+    return idStr;
+  }
+  return `MAT ${idStr}`;
+}
+
 function guessUnit(name) {
   const m = String(name || "").match(/(AP\d+)$/i);
   return m ? m[1].toUpperCase() : "";
@@ -641,9 +658,11 @@ function matClockMarkerHtml(mat, devices, selected = false) {
     distStr = formatDistance(d);
   }
 
-  const termBadge = mat.terminal ? `<span class="mat-caption-term">${escapeHtml(mat.terminal)}</span>` : "";
+  const label = formatMatLabel(mat.matId, mat.terminal);
+  const termClass = mat.terminal ? mat.terminal.toLowerCase() : "";
+  const termBadge = mat.terminal ? `<span class="mat-caption-term ${escapeHtml(termClass)}">${escapeHtml(mat.terminal)}</span>` : "";
 
-  return `<div class="mat-clock-marker${selected ? " is-selected" : ""}" title="${mat.terminal ? `[${escapeHtml(mat.terminal)}] ` : ""}MAT ${escapeHtml(mat.matId)}">
+  return `<div class="mat-clock-marker${selected ? " is-selected" : ""}" title="${mat.terminal ? `[${escapeHtml(mat.terminal)}] ` : ""}${escapeHtml(label)}">
     <div class="mat-clock-ring ${isAdapted ? "is-adapted" : ""}" style="--ring-rot:${rot}deg">
       <span class="mat-clock-beach" title="Beach · 12">B</span>
       ${ticks}
@@ -651,7 +670,7 @@ function matClockMarkerHtml(mat, devices, selected = false) {
       <div class="mat-clock-hub" title="APs · Cameras">${escapeHtml(hub)}</div>
     </div>
     <div class="mat-clock-caption">
-      <span class="mat-clock-caption-id">${termBadge}MAT ${escapeHtml(mat.matId)}</span>
+      <span class="mat-clock-caption-id">${termBadge}${escapeHtml(label)}</span>
       <span class="mat-clock-dist" data-mat-dist="${escapeHtml(mat.matId)}" ${distStr ? "" : "hidden"}>${distStr ? `📍 ${distStr}` : ""}</span>
     </div>
   </div>`;
@@ -775,8 +794,10 @@ function panMap(direction) {
 }
 
 function renderDrawer(mat) {
-  const termBadge = mat.terminal ? ` <span class="drawer-term-badge">${escapeHtml(mat.terminal)}</span>` : "";
-  els.drawerTitle.innerHTML = `MAT ${escapeHtml(mat.matId)}${termBadge}`;
+  const termClass = mat.terminal ? mat.terminal.toLowerCase() : "";
+  const termBadge = mat.terminal ? ` <span class="drawer-term-badge ${escapeHtml(termClass)}">${escapeHtml(mat.terminal)}</span>` : "";
+  const label = formatMatLabel(mat.matId, mat.terminal);
+  els.drawerTitle.innerHTML = `${escapeHtml(label)}${termBadge}`;
   if (els.drawerMeta) {
     const bits = [];
     if (mat.terminal) bits.push(mat.terminal);
@@ -984,6 +1005,8 @@ function handleSearchInput(event) {
   for (const mat of state.mats) {
     const matIdStr = String(mat.matId).toLowerCase();
     const termStr = String(mat.terminal || "").toLowerCase();
+    const labelStr = formatMatLabel(mat.matId, mat.terminal).toLowerCase();
+    const rawIdNoTc3 = matIdStr.replace(/^tc3-/, "");
     const fullMat1 = `${termStr ? `${termStr}-` : ""}mat${matIdStr}`;
     const fullMat2 = `${termStr ? `${termStr} ` : ""}mat ${matIdStr}`;
     const fullMat3 = `${termStr ? `${termStr}` : ""}${matIdStr}`;
@@ -991,19 +1014,23 @@ function handleSearchInput(event) {
     let matchKind = "mat";
     let matchDetail = "";
 
-    // 1. Terminal search (e.g. typing "tc3" or "tce")
-    if (termStr && (query === termStr || query === "tc3" && termStr === "tc3" || query === "tce" && termStr === "tce")) {
+    // 1. Terminal search (e.g. typing "tc3", "tce", "other")
+    if (termStr && (query === termStr || (query === "tc3" && termStr === "tc3") || (query === "tce" && termStr === "tce") || (query === "other" && termStr === "other"))) {
       matched = true;
       matchKind = "mat";
       matchDetail = `Terminal ${mat.terminal}`;
     }
 
-    // 2. Direct MAT ID match (e.g. "1", "mat 1", "tc3-mat1", "tce-mat49")
+    // 2. Direct ID / site match (e.g. "3", "tc3-3", "mat 3", "rtg", "portique", "dsi")
     if (!matched) {
       if (
         matIdStr === queryNormalized ||
         matIdStr === query ||
-        matIdStr.includes(queryNormalized) ||
+        matIdStr.includes(query) ||
+        rawIdNoTc3 === queryNormalized ||
+        rawIdNoTc3 === query ||
+        labelStr === query ||
+        labelStr.includes(query) ||
         fullMat1.includes(query) ||
         fullMat2.includes(query) ||
         fullMat3 === query
@@ -1122,19 +1149,20 @@ function renderSearchDropdown() {
 
   const html = state.searchResults.map((item, idx) => {
     const { mat, matchKind, matchDetail, dist } = item;
+    const label = formatMatLabel(mat.matId, mat.terminal);
     let badgeClass = "badge-mat";
     let badgeText = "MAT";
-    let title = `MAT ${mat.matId}`;
+    let title = label;
     let sub = `${mat.aps.length} AP · ${mat.cameras.length} Cam`;
 
     if (matchKind === "ap") {
       badgeClass = "badge-ap";
       badgeText = "AP";
-      title = `${matchDetail} (MAT ${mat.matId})`;
+      title = `${matchDetail} (${label})`;
     } else if (matchKind === "cam") {
       badgeClass = "badge-cam";
       badgeText = "CAM";
-      title = `${matchDetail} (MAT ${mat.matId})`;
+      title = `${matchDetail} (${label})`;
     }
 
     const termTag = mat.terminal
@@ -1177,7 +1205,7 @@ function selectSearchResult(matId, targetName = "") {
   openDrawer(mat.matId, { focus: true });
 
   if (mat.latitude == null || mat.longitude == null) {
-    toast(`MAT ${mat.matId}${mat.terminal ? ` (${mat.terminal})` : ""} ouvert (non cartographié)`);
+    toast(`${formatMatLabel(mat.matId, mat.terminal)}${mat.terminal ? ` (${mat.terminal})` : ""} ouvert (non cartographié)`);
   }
 
   if (targetName) {
